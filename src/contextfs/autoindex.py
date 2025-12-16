@@ -924,12 +924,6 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
         memories_created: int,
     ) -> None:
         """Update index status."""
-        # DEBUG: Log what we're writing
-        logger.warning(
-            f"DEBUG _update_status: namespace={namespace_id}, "
-            f"files={files_indexed}, commits={commits_indexed}, memories={memories_created}, path={repo_path}"
-        )
-
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 

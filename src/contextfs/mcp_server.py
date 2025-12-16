@@ -21,8 +21,8 @@ from contextfs.schemas import MemoryType
 # Global ContextFS instance
 _ctx: ContextFS | None = None
 
-# Source tool name (detected from environment or set by client)
-_source_tool: str = "claude-desktop"  # Default for Claude Desktop MCP
+# Source tool name (auto-detected or set by environment)
+_source_tool: str | None = None  # Will be auto-detected on first use
 
 # Session auto-started flag
 _session_started: bool = False
@@ -61,12 +61,57 @@ def get_ctx() -> ContextFS:
     return _ctx
 
 
-def get_source_tool() -> str:
-    """Get source tool name."""
-    import os
+def _detect_source_tool() -> str:
+    """Auto-detect whether running under Claude Code or Claude Desktop.
 
-    # Allow override via environment
-    return os.environ.get("CONTEXTFS_SOURCE_TOOL", _source_tool)
+    Detection strategy:
+    1. Check explicit environment variable (highest priority)
+    2. Check for Claude Code indicators (terminal environment, TTY)
+    3. Default to claude-desktop (MCP is typically used via Desktop)
+    """
+    import os
+    import sys
+
+    # Explicit override always wins
+    if env_tool := os.environ.get("CONTEXTFS_SOURCE_TOOL"):
+        return env_tool
+
+    # Claude Code indicators:
+    # - Running in a terminal (has TTY)
+    # - Has TERM environment variable
+    # - Has typical shell environment vars
+    # - Parent process is a shell or terminal
+
+    # Check for terminal/TTY (Claude Code runs in terminal, Desktop doesn't)
+    has_tty = hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+    has_term = bool(os.environ.get("TERM"))
+    has_shell = bool(os.environ.get("SHELL"))
+
+    # Claude Code typically has all three; Claude Desktop has none
+    if has_term and has_shell:
+        return "claude-code"
+
+    # Additional check: look for Claude Code specific patterns
+    # Claude Code runs from a working directory, Desktop runs from app bundle
+    cwd = os.getcwd()
+    if "/Applications/" in cwd or "/Library/" in cwd:
+        return "claude-desktop"
+
+    # If we have terminal indicators but not all, still likely claude-code
+    if has_tty or has_term:
+        return "claude-code"
+
+    return "claude-desktop"
+
+
+def get_source_tool() -> str:
+    """Get source tool name (cached after first detection)."""
+    global _source_tool
+
+    if _source_tool is None:
+        _source_tool = _detect_source_tool()
+
+    return _source_tool
 
 
 def detect_current_repo() -> str | None:
@@ -969,15 +1014,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             # Get current working directory
             cwd = Path.cwd()
             repo_name = detect_current_repo()
-
-            # DEBUG: Log cwd and namespace for troubleshooting
-            import logging
-
-            logging.warning(f"DEBUG contextfs_index: cwd={cwd}, repo_name={repo_name}")
-            ns_id = (
-                ctx._namespace_for_path(cwd) if hasattr(ctx, "_namespace_for_path") else "unknown"
-            )
-            logging.warning(f"DEBUG contextfs_index: namespace_id={ns_id}")
 
             if not repo_name:
                 return [TextContent(type="text", text="Error: Not in a git repository")]
