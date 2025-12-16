@@ -14,7 +14,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true  # Non-blocking until types are fixed
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -57,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, test]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -100,7 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -128,7 +128,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, typecheck, test]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v5
