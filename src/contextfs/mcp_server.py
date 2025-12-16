@@ -829,8 +829,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 async def run_server():
     """Run the MCP server."""
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
+    global _ctx, _session_started
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(read_stream, write_stream, server.create_initialization_options())
+    finally:
+        # Auto-save session on server shutdown
+        if _ctx is not None and _session_started:
+            try:
+                _ctx.end_session(summary="Auto-saved on MCP server shutdown")
+            except Exception:
+                pass  # Don't fail on cleanup errors
 
 
 def main():

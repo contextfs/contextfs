@@ -7,6 +7,7 @@ Provides:
 - Auto-save sessions on exit
 """
 
+import json
 from pathlib import Path
 
 from contextfs.core import ContextFS
@@ -28,7 +29,7 @@ class ClaudeCodePlugin:
             ctx: ContextFS instance (creates one if not provided)
         """
         self.ctx = ctx or ContextFS(auto_load=True)
-        self._hooks_dir = Path.home() / ".claude" / "hooks"
+        self._settings_file = Path.home() / ".claude" / "settings.json"
         self._skills_dir = Path.home() / ".claude" / "skills"
 
     def install(self) -> None:
@@ -36,16 +37,23 @@ class ClaudeCodePlugin:
         self._install_hooks()
         self._install_skills()
         print("Claude Code plugin installed successfully.")
-        print(f"Hooks: {self._hooks_dir}")
+        print(f"Settings: {self._settings_file}")
         print(f"Skills: {self._skills_dir}")
 
     def uninstall(self) -> None:
-        """Uninstall Claude Code hooks and skills."""
-        # Remove hook files
-        for hook_name in ["PreToolExecution", "PostToolExecution", "SessionStart", "SessionEnd"]:
-            hook_file = self._hooks_dir / f"{hook_name}.py"
-            if hook_file.exists():
-                hook_file.unlink()
+        """Uninstall Claude Code hooks from settings."""
+        if self._settings_file.exists():
+            settings = json.loads(self._settings_file.read_text())
+            if "hooks" in settings:
+                # Remove contextfs hooks
+                for hook_type in ["PreCompact", "SessionEnd"]:
+                    if hook_type in settings["hooks"]:
+                        settings["hooks"][hook_type] = [
+                            h
+                            for h in settings["hooks"][hook_type]
+                            if "contextfs" not in h.get("hooks", [{}])[0].get("command", "")
+                        ]
+                self._settings_file.write_text(json.dumps(settings, indent=2))
 
         # Remove skill files
         skill_file = self._skills_dir / "contextfs-search.md"
@@ -55,112 +63,47 @@ class ClaudeCodePlugin:
         print("Claude Code plugin uninstalled.")
 
     def _install_hooks(self) -> None:
-        """Install lifecycle hooks."""
-        self._hooks_dir.mkdir(parents=True, exist_ok=True)
+        """Install lifecycle hooks into Claude Code settings."""
+        self._settings_file.parent.mkdir(parents=True, exist_ok=True)
 
-        # Session Start Hook
-        session_start_hook = '''#!/usr/bin/env python3
-"""ContextFS: Session start hook - load relevant context."""
-import sys
-import json
+        # Load existing settings or create new
+        if self._settings_file.exists():
+            settings = json.loads(self._settings_file.read_text())
+        else:
+            settings = {}
 
-def main():
-    from contextfs import ContextFS
+        # Ensure hooks section exists
+        if "hooks" not in settings:
+            settings["hooks"] = {}
 
-    ctx = ContextFS(auto_load=True)
-    session = ctx.start_session(tool="claude-code")
+        # Add PreCompact hook (saves before context compaction)
+        settings["hooks"]["PreCompact"] = [
+            {
+                "matcher": {},
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "uvx contextfs save-session --label 'auto-compact'",
+                    }
+                ],
+            }
+        ]
 
-    # Get recent context for injection
-    context = ctx.get_context_for_task("current task", limit=3)
+        # Add SessionEnd hook (saves when session ends)
+        settings["hooks"]["SessionEnd"] = [
+            {
+                "matcher": {},
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "uvx contextfs save-session --label 'session-end'",
+                    }
+                ],
+            }
+        ]
 
-    if context:
-        print("## Loaded Context from ContextFS")
-        for c in context:
-            print(f"- {c}")
-        print()
-
-if __name__ == "__main__":
-    main()
-'''
-        (self._hooks_dir / "SessionStart.py").write_text(session_start_hook)
-
-        # Session End Hook
-        session_end_hook = '''#!/usr/bin/env python3
-"""ContextFS: Session end hook - save session."""
-import sys
-
-def main():
-    from contextfs import ContextFS
-
-    ctx = ContextFS(auto_load=False)
-    ctx.end_session(generate_summary=True)
-    print("[ContextFS] Session saved.")
-
-if __name__ == "__main__":
-    main()
-'''
-        (self._hooks_dir / "SessionEnd.py").write_text(session_end_hook)
-
-        # Pre-Tool Execution Hook
-        pre_tool_hook = '''#!/usr/bin/env python3
-"""ContextFS: Pre-tool execution hook - inject context."""
-import sys
-import json
-import os
-
-def main():
-    # Read tool info from stdin or env
-    tool_name = os.environ.get("CLAUDE_TOOL_NAME", "")
-
-    if tool_name in ["Read", "Write", "Edit"]:
-        from contextfs import ContextFS
-        ctx = ContextFS(auto_load=False)
-
-        # Get file-related context
-        file_path = os.environ.get("CLAUDE_TOOL_FILE", "")
-        if file_path:
-            context = ctx.search(file_path, limit=2)
-            if context:
-                print(f"## Related Context for {file_path}")
-                for r in context:
-                    print(f"- [{r.memory.type.value}] {r.memory.content[:100]}...")
-
-if __name__ == "__main__":
-    main()
-'''
-        (self._hooks_dir / "PreToolExecution.py").write_text(pre_tool_hook)
-
-        # Post-Tool Execution Hook
-        post_tool_hook = '''#!/usr/bin/env python3
-"""ContextFS: Post-tool execution hook - capture observations."""
-import sys
-import json
-import os
-
-def main():
-    tool_name = os.environ.get("CLAUDE_TOOL_NAME", "")
-    tool_result = os.environ.get("CLAUDE_TOOL_RESULT", "")
-
-    # Capture significant observations
-    if tool_name == "Bash" and "error" in tool_result.lower():
-        from contextfs import ContextFS
-        from contextfs.schemas import MemoryType
-
-        ctx = ContextFS(auto_load=False)
-        ctx.save(
-            content=f"Error in {tool_name}: {tool_result[:500]}",
-            type=MemoryType.ERROR,
-            tags=["error", "bash"],
-        )
-
-if __name__ == "__main__":
-    main()
-'''
-        (self._hooks_dir / "PostToolExecution.py").write_text(post_tool_hook)
-
-        # Make hooks executable
-        for hook_file in self._hooks_dir.glob("*.py"):
-            hook_file.chmod(0o755)
+        # Write updated settings
+        self._settings_file.write_text(json.dumps(settings, indent=2))
 
     def _install_skills(self) -> None:
         """Install search skill."""
@@ -199,34 +142,6 @@ for r in results:
 ```
 """
         (self._skills_dir / "contextfs-search.md").write_text(search_skill)
-
-
-# Hook entry points for direct execution
-
-
-def session_start_hook():
-    """Entry point for session start hook."""
-    plugin = ClaudeCodePlugin()
-    plugin.ctx.start_session(tool="claude-code")
-
-    # Load and display relevant context
-    context = plugin.ctx.get_context_for_task("current session", limit=5)
-    if context:
-        print("\n## ContextFS: Loaded Context\n")
-        for c in context:
-            print(f"- {c}\n")
-
-
-def session_end_hook():
-    """Entry point for session end hook."""
-    plugin = ClaudeCodePlugin()
-    plugin.ctx.end_session(generate_summary=True)
-
-
-def capture_message_hook(role: str, content: str):
-    """Capture a message during the session."""
-    plugin = ClaudeCodePlugin()
-    plugin.ctx.add_message(role, content)
 
 
 # CLI commands
