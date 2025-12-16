@@ -624,6 +624,33 @@ async def list_tools() -> list[Tool]:
                 "required": ["session_id"],
             },
         ),
+        Tool(
+            name="contextfs_import_conversation",
+            description="Import a JSON conversation export as an episodic memory. Use this to save Claude Desktop or other AI conversations.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "json_content": {
+                        "type": "string",
+                        "description": "JSON string containing the conversation export",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "Brief summary of the conversation",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Tags for categorization",
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Project name for grouping",
+                    },
+                },
+                "required": ["json_content"],
+            },
+        ),
     ]
 
 
@@ -795,6 +822,12 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 f"Type: {memory.type.value}",
                 f"Created: {memory.created_at.isoformat()}",
             ]
+            if memory.source_tool:
+                output.append(f"Source: {memory.source_tool}")
+            if memory.source_repo:
+                output.append(f"Repo: {memory.source_repo}")
+            if memory.project:
+                output.append(f"Project: {memory.project}")
             if memory.summary:
                 output.append(f"Summary: {memory.summary}")
             if memory.tags:
@@ -1171,6 +1204,95 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 return [TextContent(type="text", text=f"Session not found: {session_id}")]
 
             return [TextContent(type="text", text=f"Session deleted: {session_id}")]
+
+        elif name == "contextfs_import_conversation":
+            import json
+
+            json_content = arguments.get("json_content", "")
+            if not json_content:
+                return [TextContent(type="text", text="Error: json_content is required")]
+
+            summary = arguments.get("summary")
+            tags = arguments.get("tags", [])
+            project = arguments.get("project")
+
+            # Try to parse and format the JSON
+            try:
+                conversation_data = json.loads(json_content)
+            except json.JSONDecodeError as e:
+                return [TextContent(type="text", text=f"Error parsing JSON: {e}")]
+
+            # Format the conversation for storage
+            formatted_content = []
+
+            # Handle different JSON formats
+            if isinstance(conversation_data, list):
+                # Array of messages format
+                for msg in conversation_data:
+                    if isinstance(msg, dict):
+                        role = msg.get("role", msg.get("sender", "unknown"))
+                        content = msg.get("content", msg.get("text", msg.get("message", "")))
+                        if isinstance(content, list):
+                            # Handle content blocks (Claude format)
+                            content = " ".join(
+                                c.get("text", "") for c in content if isinstance(c, dict)
+                            )
+                        formatted_content.append(f"[{role}]: {content}")
+            elif isinstance(conversation_data, dict):
+                # Object format - look for messages array
+                messages = conversation_data.get(
+                    "messages", conversation_data.get("conversation", [])
+                )
+                for msg in messages:
+                    if isinstance(msg, dict):
+                        role = msg.get("role", msg.get("sender", "unknown"))
+                        content = msg.get("content", msg.get("text", msg.get("message", "")))
+                        if isinstance(content, list):
+                            content = " ".join(
+                                c.get("text", "") for c in content if isinstance(c, dict)
+                            )
+                        formatted_content.append(f"[{role}]: {content}")
+
+                # Also capture any metadata
+                if "title" in conversation_data and not summary:
+                    summary = conversation_data["title"]
+                if "name" in conversation_data and not summary:
+                    summary = conversation_data["name"]
+
+            if not formatted_content:
+                # Just store raw JSON if we couldn't parse it
+                formatted_content = [json_content[:5000]]
+
+            content = "\n\n".join(formatted_content)
+
+            # Auto-generate summary if not provided
+            if not summary:
+                # Take first 100 chars of content as summary
+                summary = content[:100] + "..." if len(content) > 100 else content
+
+            # Add conversation tag
+            if "conversation" not in tags:
+                tags = ["conversation", "import"] + list(tags)
+
+            source_repo = detect_current_repo()
+
+            memory = ctx.save(
+                content=content,
+                type=MemoryType.EPISODIC,
+                tags=tags,
+                summary=summary,
+                source_tool=get_source_tool(),
+                source_repo=source_repo,
+                project=project,
+            )
+
+            msg_count = len(formatted_content) if formatted_content else 0
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Conversation imported successfully.\nID: {memory.id}\nMessages: {msg_count}\nSummary: {summary}",
+                )
+            ]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]

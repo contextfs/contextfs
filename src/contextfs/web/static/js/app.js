@@ -68,6 +68,13 @@ class ContextFSBrowser {
         // Footer actions
         document.getElementById('export-btn')?.addEventListener('click', () => this.exportMemories());
         document.getElementById('sync-btn')?.addEventListener('click', () => this.syncToPostgres());
+        document.getElementById('refresh-btn')?.addEventListener('click', () => this.refreshAll());
+        // Auto-refresh when tab becomes visible
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                this.refreshAll();
+            }
+        });
     }
     async init() {
         try {
@@ -110,6 +117,29 @@ class ContextFSBrowser {
         catch {
             this.db = new SQL.Database();
         }
+    }
+    async refreshAll() {
+        // Reload database from API if using sql.js
+        if (this.useSqlJs) {
+            try {
+                const response = await fetch(`${this.apiBase}/database`);
+                if (response.ok) {
+                    const SQL = await window.initSqlJs({
+                        locateFile: (file) => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/${file}`,
+                    });
+                    const buffer = await response.arrayBuffer();
+                    this.db = new SQL.Database(new Uint8Array(buffer));
+                }
+            } catch (e) {
+                console.log('Failed to reload database:', e);
+            }
+        }
+        // Reload all views
+        await this.loadNamespaces();
+        await this.loadRecent();
+        await this.loadSessions(true);
+        await this.loadStats();
+        await this.showRecentInSearch();
     }
     // ==================== Search ====================
     async search(loadMore = false) {
@@ -789,6 +819,14 @@ class ContextFSBrowser {
             const data = await response.json();
 
             if (data.success) {
+                // Also delete from local DB if using sql.js
+                if (this.useSqlJs && this.db) {
+                    try {
+                        this.db.run('DELETE FROM memories WHERE id = ? OR id LIKE ?', [id, `${id}%`]);
+                    } catch (e) {
+                        console.log('Local DB delete failed:', e);
+                    }
+                }
                 this.closeModal();
                 await this.loadRecent();
                 await this.showRecentInSearch();
@@ -920,6 +958,15 @@ class ContextFSBrowser {
             const data = await response.json();
 
             if (data.success) {
+                // Also delete from local DB if using sql.js
+                if (this.useSqlJs && this.db) {
+                    try {
+                        this.db.run('DELETE FROM messages WHERE session_id = ? OR session_id LIKE ?', [id, `${id}%`]);
+                        this.db.run('DELETE FROM sessions WHERE id = ? OR id LIKE ?', [id, `${id}%`]);
+                    } catch (e) {
+                        console.log('Local DB delete failed:', e);
+                    }
+                }
                 this.closeModal();
                 await this.loadSessions(true);
                 alert('Session deleted successfully');

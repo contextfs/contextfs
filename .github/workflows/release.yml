@@ -100,20 +100,15 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
-      - name: Get previous tag
-        id: prev_tag
-        run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          echo "tag=${PREV_TAG}" >> $GITHUB_OUTPUT
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Generate changelog
         id: changelog
         run: |
-          if [ -n "${{ steps.prev_tag.outputs.tag }}" ]; then
-            CHANGELOG=$(git log ${{ steps.prev_tag.outputs.tag }}..HEAD --pretty=format:"- %s" --no-merges | head -50)
-          else
-            CHANGELOG=$(git log --pretty=format:"- %s" --no-merges -10)
-          fi
+          CHANGELOG=$(python scripts/generate_changelog.py --format markdown 2>/dev/null || echo "- See commit history for changes")
           echo "changelog<<EOF" >> $GITHUB_OUTPUT
           echo "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT

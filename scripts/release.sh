@@ -39,6 +39,21 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 
 echo "Releasing version $VERSION..."
+echo ""
+
+# Show changelog preview
+echo "=== What's Changed (since last release) ==="
+python scripts/generate_changelog.py --format markdown 2>/dev/null || echo "No previous tag found, will include recent commits"
+echo ""
+echo "============================================"
+echo ""
+
+read -p "Continue with release? [y/N] " -n 1 -r
+echo ""
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Release cancelled."
+    exit 0
+fi
 
 # Update pyproject.toml
 sed -i '' "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
