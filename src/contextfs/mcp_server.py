@@ -530,6 +530,100 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="contextfs_update",
+            description="Update an existing memory",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Memory ID (can be partial, at least 8 chars)",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "New content (optional)",
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "fact",
+                            "decision",
+                            "procedural",
+                            "episodic",
+                            "user",
+                            "code",
+                            "error",
+                        ],
+                        "description": "New memory type (optional)",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "New tags (optional)",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "New summary (optional)",
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "New project name (optional)",
+                    },
+                },
+                "required": ["id"],
+            },
+        ),
+        Tool(
+            name="contextfs_delete",
+            description="Delete a memory",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Memory ID (can be partial, at least 8 chars)",
+                    },
+                },
+                "required": ["id"],
+            },
+        ),
+        Tool(
+            name="contextfs_update_session",
+            description="Update an existing session",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID (can be partial)",
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "New label (optional)",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "New summary (optional)",
+                    },
+                },
+                "required": ["session_id"],
+            },
+        ),
+        Tool(
+            name="contextfs_delete_session",
+            description="Delete a session and its messages",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session ID (can be partial)",
+                    },
+                },
+                "required": ["session_id"],
+            },
+        ),
     ]
 
 
@@ -1006,6 +1100,77 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         text="No indexing in progress. Use contextfs_index to start.",
                     )
                 ]
+
+        elif name == "contextfs_update":
+            memory_id = arguments.get("id", "")
+            if not memory_id:
+                return [TextContent(type="text", text="Error: id is required")]
+
+            memory_type = MemoryType(arguments["type"]) if arguments.get("type") else None
+
+            memory = ctx.update(
+                memory_id=memory_id,
+                content=arguments.get("content"),
+                type=memory_type,
+                tags=arguments.get("tags"),
+                summary=arguments.get("summary"),
+                project=arguments.get("project"),
+            )
+
+            if not memory:
+                return [TextContent(type="text", text=f"Memory not found: {memory_id}")]
+
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Memory updated successfully.\nID: {memory.id}\nType: {memory.type.value}",
+                )
+            ]
+
+        elif name == "contextfs_delete":
+            memory_id = arguments.get("id", "")
+            if not memory_id:
+                return [TextContent(type="text", text="Error: id is required")]
+
+            deleted = ctx.delete(memory_id)
+
+            if not deleted:
+                return [TextContent(type="text", text=f"Memory not found: {memory_id}")]
+
+            return [TextContent(type="text", text=f"Memory deleted: {memory_id}")]
+
+        elif name == "contextfs_update_session":
+            session_id = arguments.get("session_id", "")
+            if not session_id:
+                return [TextContent(type="text", text="Error: session_id is required")]
+
+            session = ctx.update_session(
+                session_id=session_id,
+                label=arguments.get("label"),
+                summary=arguments.get("summary"),
+            )
+
+            if not session:
+                return [TextContent(type="text", text=f"Session not found: {session_id}")]
+
+            return [
+                TextContent(
+                    type="text",
+                    text=f"Session updated successfully.\nID: {session.id}\nLabel: {session.label or 'none'}",
+                )
+            ]
+
+        elif name == "contextfs_delete_session":
+            session_id = arguments.get("session_id", "")
+            if not session_id:
+                return [TextContent(type="text", text="Error: session_id is required")]
+
+            deleted = ctx.delete_session(session_id)
+
+            if not deleted:
+                return [TextContent(type="text", text=f"Session not found: {session_id}")]
+
+            return [TextContent(type="text", text=f"Session deleted: {session_id}")]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]

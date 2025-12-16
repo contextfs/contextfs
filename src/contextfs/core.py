@@ -756,17 +756,118 @@ class ContextFS:
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
-        cursor.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
-        cursor.execute("DELETE FROM memories_fts WHERE id = ?", (memory_id,))
+        # Support partial ID matching
+        cursor.execute("SELECT id FROM memories WHERE id LIKE ?", (f"{memory_id}%",))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        full_id = row[0]
+        cursor.execute("DELETE FROM memories WHERE id = ?", (full_id,))
         deleted = cursor.rowcount > 0
+        cursor.execute("DELETE FROM memories_fts WHERE id = ?", (full_id,))
 
         conn.commit()
         conn.close()
 
         if deleted:
-            self.rag.remove_memory(memory_id)
+            self.rag.remove_memory(full_id)
 
         return deleted
+
+    def update(
+        self,
+        memory_id: str,
+        content: str | None = None,
+        type: MemoryType | None = None,
+        tags: list[str] | None = None,
+        summary: str | None = None,
+        project: str | None = None,
+        metadata: dict | None = None,
+    ) -> Memory | None:
+        """
+        Update an existing memory.
+
+        Args:
+            memory_id: Memory ID (can be partial, at least 8 chars)
+            content: New content (optional)
+            type: New type (optional)
+            tags: New tags (optional)
+            summary: New summary (optional)
+            project: New project (optional)
+            metadata: New metadata (optional)
+
+        Returns:
+            Updated Memory or None if not found
+        """
+        # First, recall the existing memory
+        memory = self.recall(memory_id)
+        if not memory:
+            return None
+
+        # Update fields if provided
+        if content is not None:
+            memory.content = content
+        if type is not None:
+            memory.type = type
+        if tags is not None:
+            memory.tags = tags
+        if summary is not None:
+            memory.summary = summary
+        if project is not None:
+            memory.project = project
+        if metadata is not None:
+            memory.metadata = metadata
+
+        memory.updated_at = datetime.now()
+
+        # Update in database
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            UPDATE memories SET
+                content = ?,
+                type = ?,
+                tags = ?,
+                summary = ?,
+                project = ?,
+                updated_at = ?,
+                metadata = ?
+            WHERE id = ?
+        """,
+            (
+                memory.content,
+                memory.type.value,
+                json.dumps(memory.tags),
+                memory.summary,
+                memory.project,
+                memory.updated_at.isoformat(),
+                json.dumps(memory.metadata),
+                memory.id,
+            ),
+        )
+
+        # Update FTS
+        cursor.execute("DELETE FROM memories_fts WHERE id = ?", (memory.id,))
+        cursor.execute(
+            """
+            INSERT INTO memories_fts (id, content, summary, tags)
+            VALUES (?, ?, ?, ?)
+        """,
+            (memory.id, memory.content, memory.summary, " ".join(memory.tags)),
+        )
+
+        conn.commit()
+        conn.close()
+
+        # Update RAG index
+        self.rag.remove_memory(memory.id)
+        self.rag.add_memory(memory)
+
+        return memory
 
     def _row_to_memory(self, row) -> Memory:
         """Convert database row to Memory object."""
@@ -1015,6 +1116,84 @@ class ContextFS:
             )
 
         return sessions
+
+    def update_session(
+        self,
+        session_id: str,
+        label: str | None = None,
+        summary: str | None = None,
+    ) -> Session | None:
+        """
+        Update an existing session.
+
+        Args:
+            session_id: Session ID (can be partial)
+            label: New label (optional)
+            summary: New summary (optional)
+
+        Returns:
+            Updated Session or None if not found
+        """
+        session = self.load_session(session_id=session_id)
+        if not session:
+            return None
+
+        # Update fields if provided
+        if label is not None:
+            session.label = label
+        if summary is not None:
+            session.summary = summary
+
+        # Update in database
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            UPDATE sessions SET label = ?, summary = ?
+            WHERE id = ?
+        """,
+            (session.label, session.summary, session.id),
+        )
+
+        conn.commit()
+        conn.close()
+
+        return session
+
+    def delete_session(self, session_id: str) -> bool:
+        """
+        Delete a session and its messages.
+
+        Args:
+            session_id: Session ID (can be partial)
+
+        Returns:
+            True if deleted, False if not found
+        """
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        # Support partial ID matching
+        cursor.execute("SELECT id FROM sessions WHERE id LIKE ?", (f"{session_id}%",))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        full_id = row[0]
+
+        # Delete messages first
+        cursor.execute("DELETE FROM messages WHERE session_id = ?", (full_id,))
+
+        # Delete session
+        cursor.execute("DELETE FROM sessions WHERE id = ?", (full_id,))
+        deleted = cursor.rowcount > 0
+
+        conn.commit()
+        conn.close()
+
+        return deleted
 
     def _format_session_summary(self) -> str:
         """Format session messages for episodic memory."""
