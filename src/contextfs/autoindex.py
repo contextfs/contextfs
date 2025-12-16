@@ -180,6 +180,7 @@ class IndexStatus:
         indexed: bool = False,
         indexed_at: datetime | None = None,
         files_indexed: int = 0,
+        commits_indexed: int = 0,
         memories_created: int = 0,
         repo_path: str | None = None,
         commit_hash: str | None = None,
@@ -188,6 +189,7 @@ class IndexStatus:
         self.indexed = indexed
         self.indexed_at = indexed_at
         self.files_indexed = files_indexed
+        self.commits_indexed = commits_indexed
         self.memories_created = memories_created
         self.repo_path = repo_path
         self.commit_hash = commit_hash
@@ -240,12 +242,19 @@ class AutoIndexer:
                 indexed INTEGER DEFAULT 0,
                 indexed_at TEXT,
                 files_indexed INTEGER DEFAULT 0,
+                commits_indexed INTEGER DEFAULT 0,
                 memories_created INTEGER DEFAULT 0,
                 repo_path TEXT,
                 commit_hash TEXT,
                 metadata TEXT
             )
         """)
+
+        # Migration: add commits_indexed column if missing
+        cursor.execute("PRAGMA table_info(index_status)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "commits_indexed" not in columns:
+            cursor.execute("ALTER TABLE index_status ADD COLUMN commits_indexed INTEGER DEFAULT 0")
 
         # Track indexed files for incremental updates
         cursor.execute("""
@@ -290,7 +299,14 @@ class AutoIndexer:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        cursor.execute("SELECT * FROM index_status WHERE namespace_id = ?", (namespace_id,))
+        cursor.execute(
+            """
+            SELECT namespace_id, indexed, indexed_at, files_indexed,
+                   commits_indexed, memories_created, repo_path, commit_hash
+            FROM index_status WHERE namespace_id = ?
+        """,
+            (namespace_id,),
+        )
         row = cursor.fetchone()
         conn.close()
 
@@ -302,9 +318,10 @@ class AutoIndexer:
             indexed=bool(row[1]),
             indexed_at=datetime.fromisoformat(row[2]) if row[2] else None,
             files_indexed=row[3],
-            memories_created=row[4],
-            repo_path=row[5],
-            commit_hash=row[6],
+            commits_indexed=row[4] or 0,
+            memories_created=row[5],
+            repo_path=row[6],
+            commit_hash=row[7],
         )
 
     def list_all_indexes(self) -> list[IndexStatus]:
@@ -314,7 +331,7 @@ class AutoIndexer:
 
         cursor.execute("""
             SELECT namespace_id, indexed, indexed_at, files_indexed,
-                   memories_created, repo_path, commit_hash
+                   commits_indexed, memories_created, repo_path, commit_hash
             FROM index_status
             WHERE indexed = 1
             ORDER BY indexed_at DESC
@@ -328,9 +345,10 @@ class AutoIndexer:
                 indexed=bool(row[1]),
                 indexed_at=datetime.fromisoformat(row[2]) if row[2] else None,
                 files_indexed=row[3],
-                memories_created=row[4],
-                repo_path=row[5],
-                commit_hash=row[6],
+                commits_indexed=row[4] or 0,
+                memories_created=row[5],
+                repo_path=row[6],
+                commit_hash=row[7],
             )
             for row in rows
         ]
@@ -605,14 +623,20 @@ class AutoIndexer:
             incremental=incremental,
         )
         memories_created += git_stats["memories_created"]
+        commits_indexed = git_stats["commits_indexed"]
 
-        # Update index status
-        self._update_status(
-            namespace_id,
-            repo_path,
-            files_indexed,
-            memories_created,
-        )
+        # Update index status only if we indexed something new
+        # Don't overwrite existing status with zeros from incremental skips
+        if files_indexed > 0 or commits_indexed > 0 or memories_created > 0 or not incremental:
+            self._update_status(
+                namespace_id,
+                repo_path,
+                files_indexed,
+                commits_indexed,
+                memories_created,
+            )
+        else:
+            logger.debug("Skipping status update - no new files indexed (incremental mode)")
 
         logger.info(
             f"Indexing complete: {files_indexed} files, "
@@ -896,9 +920,16 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
         namespace_id: str,
         repo_path: Path,
         files_indexed: int,
+        commits_indexed: int,
         memories_created: int,
     ) -> None:
         """Update index status."""
+        # DEBUG: Log what we're writing
+        logger.warning(
+            f"DEBUG _update_status: namespace={namespace_id}, "
+            f"files={files_indexed}, commits={commits_indexed}, memories={memories_created}, path={repo_path}"
+        )
+
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -907,13 +938,14 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
         cursor.execute(
             """
             INSERT OR REPLACE INTO index_status
-            (namespace_id, indexed, indexed_at, files_indexed, memories_created, repo_path, commit_hash)
-            VALUES (?, 1, ?, ?, ?, ?, ?)
+            (namespace_id, indexed, indexed_at, files_indexed, commits_indexed, memories_created, repo_path, commit_hash)
+            VALUES (?, 1, ?, ?, ?, ?, ?, ?)
         """,
             (
                 namespace_id,
                 datetime.now().isoformat(),
                 files_indexed,
+                commits_indexed,
                 memories_created,
                 str(repo_path),
                 commit_hash,
@@ -930,6 +962,7 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
 
         cursor.execute("DELETE FROM index_status WHERE namespace_id = ?", (namespace_id,))
         cursor.execute("DELETE FROM indexed_files WHERE namespace_id = ?", (namespace_id,))
+        cursor.execute("DELETE FROM indexed_commits WHERE namespace_id = ?", (namespace_id,))
 
         conn.commit()
         conn.close()

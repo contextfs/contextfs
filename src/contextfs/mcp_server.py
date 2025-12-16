@@ -794,7 +794,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 for idx in indexes:
                     repo_name = idx.repo_path.split("/")[-1] if idx.repo_path else idx.namespace_id
                     output.append(
-                        f"  • {repo_name} ({idx.files_indexed} files, {idx.memories_created} code chunks)"
+                        f"  • {repo_name} ({idx.files_indexed} files, {idx.commits_indexed} commits, {idx.memories_created} code chunks)"
                     )
             else:
                 output.append("No indexed repositories found.")
@@ -970,6 +970,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             cwd = Path.cwd()
             repo_name = detect_current_repo()
 
+            # DEBUG: Log cwd and namespace for troubleshooting
+            import logging
+
+            logging.warning(f"DEBUG contextfs_index: cwd={cwd}, repo_name={repo_name}")
+            ns_id = (
+                ctx._namespace_for_path(cwd) if hasattr(ctx, "_namespace_for_path") else "unknown"
+            )
+            logging.warning(f"DEBUG contextfs_index: namespace_id={ns_id}")
+
             if not repo_name:
                 return [TextContent(type="text", text="Error: Not in a git repository")]
 
@@ -1129,6 +1138,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         type="text",
                         text=f"Indexing complete: {repo}\n"
                         f"Files indexed: {result.get('files_indexed', 0)}\n"
+                        f"Commits indexed: {result.get('commits_indexed', 0)}\n"
                         f"Memories created: {result.get('memories_created', 0)}\n"
                         f"Skipped: {result.get('skipped', 0)}",
                     )
@@ -1144,7 +1154,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         TextContent(
                             type="text",
                             text=f"No indexing in progress.\n"
-                            f"Repository indexed: {status.files_indexed} files",
+                            f"Repository indexed: {status.files_indexed} files, {status.commits_indexed} commits, {status.memories_created} code chunks",
                         )
                     ]
                 return [
