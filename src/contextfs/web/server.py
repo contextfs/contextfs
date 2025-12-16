@@ -214,6 +214,7 @@ def create_app(
         type: str | None = Query(None, description="Memory type filter"),
         namespace: str | None = Query(None, description="Namespace filter"),
         limit: int = Query(20, ge=1, le=100, description="Max results"),
+        offset: int = Query(0, ge=0, description="Offset for pagination"),
         semantic: bool = Query(True, description="Use semantic search"),
         smart: bool = Query(False, description="Use smart routing based on memory type"),
     ):
@@ -224,13 +225,15 @@ def create_app(
 
         try:
             memory_type = MemoryType(type) if type else None
+            # Fetch extra results to support offset pagination
+            fetch_limit = limit + offset
 
             if smart:
                 # Smart search routes to optimal backend based on memory type
                 results = await asyncio.to_thread(
                     hybrid.smart_search,
                     query=q,
-                    limit=limit,
+                    limit=fetch_limit,
                     type=memory_type,
                     namespace_id=namespace,
                 )
@@ -238,7 +241,7 @@ def create_app(
                 results = await asyncio.to_thread(
                     hybrid.search,
                     query=q,
-                    limit=limit,
+                    limit=fetch_limit,
                     type=memory_type,
                     namespace_id=namespace,
                 )
@@ -246,14 +249,17 @@ def create_app(
                 results = await asyncio.to_thread(
                     fts.search,
                     query=q,
-                    limit=limit,
+                    limit=fetch_limit,
                     type=memory_type,
                     namespace_id=namespace,
                 )
 
+            # Apply offset pagination
+            paginated_results = results[offset:offset + limit]
+
             return APIResponse(
                 success=True,
-                data=[serialize_search_result(r) for r in results],
+                data=[serialize_search_result(r) for r in paginated_results],
             )
 
         except Exception as e:

@@ -9,10 +9,16 @@ class ContextFSBrowser {
         this.db = null;
         this.apiBase = '/api';
         this.useSqlJs = false;
-        // Pagination state
+        // Pagination state - sessions
         this.sessionsOffset = 0;
         this.sessionsPageSize = 20;
         this.sessionsHasMore = true;
+        // Pagination state - search
+        this.searchOffset = 0;
+        this.searchPageSize = 20;
+        this.searchHasMore = true;
+        this.currentSearchParams = null;
+        this.currentSearchResults = [];
         this.initElements();
         this.initEventListeners();
         this.init();
@@ -106,7 +112,7 @@ class ContextFSBrowser {
         }
     }
     // ==================== Search ====================
-    async search() {
+    async search(loadMore = false) {
         const query = this.searchInput.value.trim();
         if (!query) {
             // Show recent memories when no query
@@ -116,9 +122,21 @@ class ContextFSBrowser {
         const type = this.typeFilter.value;
         const namespace = this.namespaceFilter.value;
         const searchMode = this.searchModeSelect.value;
+        // Reset pagination for new search
+        if (!loadMore) {
+            this.searchOffset = 0;
+            this.searchHasMore = true;
+            this.currentSearchResults = [];
+            this.currentSearchParams = {
+                query,
+                type: type || undefined,
+                namespace: namespace || undefined,
+                searchMode,
+            };
+        }
         try {
             if (searchMode === 'dual') {
-                // Show dual view
+                // Show dual view (no pagination for dual mode)
                 this.showDualView();
                 this.ftsResultsContainer.innerHTML = '<div class="loading"></div>';
                 this.ragResultsContainer.innerHTML = '<div class="loading"></div>';
@@ -128,20 +146,29 @@ class ContextFSBrowser {
             else {
                 // Show single view
                 this.showSingleView();
-                this.resultsContainer.innerHTML = '<div class="loading"></div>';
+                if (!loadMore) {
+                    this.resultsContainer.innerHTML = '<div class="loading"></div>';
+                }
                 let results;
                 if (this.useSqlJs && this.db && searchMode === 'fts') {
-                    results = this.searchLocal(query, type || undefined, namespace || undefined);
+                    results = this.searchLocal(query, type || undefined, namespace || undefined, this.searchPageSize, this.searchOffset);
                 }
                 else {
-                    results = await this.searchAPI(query, type || undefined, namespace || undefined, searchMode);
+                    results = await this.searchAPI(query, type || undefined, namespace || undefined, searchMode, this.searchOffset);
                 }
-                this.renderResults(results);
+                // Check if there are more results
+                this.searchHasMore = results.length === this.searchPageSize;
+                this.searchOffset += results.length;
+                this.currentSearchResults = loadMore ? [...this.currentSearchResults, ...results] : results;
+                this.renderResults(results, loadMore);
             }
         }
         catch (error) {
             this.resultsContainer.innerHTML = `<p class="placeholder">Error: ${error.message}</p>`;
         }
+    }
+    async loadMoreSearch() {
+        await this.search(true);
     }
     showSingleView() {
         this.resultsContainer.style.display = 'block';
@@ -182,7 +209,7 @@ class ContextFSBrowser {
             this.resultsContainer.innerHTML = `<p class="placeholder">Error loading memories: ${error.message}</p>`;
         }
     }
-    searchLocal(query, type, namespace, limit = 20) {
+    searchLocal(query, type, namespace, limit = 20, offset = 0) {
         if (!this.db)
             return [];
         // FTS5 search
@@ -201,7 +228,7 @@ class ContextFSBrowser {
             sql += ' AND m.type = ?';
             params.push(type);
         }
-        sql += ` ORDER BY rank LIMIT ${limit}`;
+        sql += ` ORDER BY rank LIMIT ${limit} OFFSET ${offset}`;
         try {
             const results = this.db.exec(sql, params);
             if (!results.length || !results[0].values.length)
@@ -210,10 +237,10 @@ class ContextFSBrowser {
         }
         catch {
             // Fallback to LIKE search
-            return this.searchLocalFallback(query, type, namespace, limit);
+            return this.searchLocalFallback(query, type, namespace, limit, offset);
         }
     }
-    searchLocalFallback(query, type, namespace, limit = 20) {
+    searchLocalFallback(query, type, namespace, limit = 20, offset = 0) {
         if (!this.db)
             return [];
         let sql = `SELECT * FROM memories WHERE (content LIKE ? OR summary LIKE ?)`;
@@ -226,7 +253,7 @@ class ContextFSBrowser {
             sql += ' AND type = ?';
             params.push(type);
         }
-        sql += ` ORDER BY created_at DESC LIMIT ${limit}`;
+        sql += ` ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
         const results = this.db.exec(sql, params);
         if (!results.length || !results[0].values.length)
             return [];
@@ -247,10 +274,11 @@ class ContextFSBrowser {
         }
         return query;
     }
-    async searchAPI(query, type, namespace, searchMode = 'hybrid') {
+    async searchAPI(query, type, namespace, searchMode = 'hybrid', offset = 0) {
         const params = new URLSearchParams({
             q: query,
-            limit: '20',
+            limit: String(this.searchPageSize),
+            offset: String(offset),
         });
         // Map search mode to API parameters
         if (searchMode === 'smart') {
@@ -316,20 +344,42 @@ class ContextFSBrowser {
             });
         });
     }
-    renderResults(results) {
-        if (!results.length) {
+    renderResults(results, append = false) {
+        if (!results.length && !append) {
             this.resultsContainer.innerHTML = '<p class="placeholder">No memories found</p>';
             return;
         }
-        this.resultsContainer.innerHTML = results.map((r) => this.renderMemoryCard(r)).join('');
-        // Add click handlers
+        const resultsHtml = results.map((r) => this.renderMemoryCard(r)).join('');
+        const loadMoreHtml = this.searchHasMore ? `
+            <button class="load-more-btn" id="load-more-search">Load More Results</button>
+        ` : '';
+        if (append) {
+            // Remove old load more button if exists
+            const oldBtn = this.resultsContainer.querySelector('#load-more-search');
+            if (oldBtn)
+                oldBtn.remove();
+            // Append new results
+            this.resultsContainer.insertAdjacentHTML('beforeend', resultsHtml + loadMoreHtml);
+        }
+        else {
+            this.resultsContainer.innerHTML = resultsHtml + loadMoreHtml;
+        }
+        // Add click handlers for memory cards
         this.resultsContainer.querySelectorAll('.memory-card').forEach((card) => {
-            card.addEventListener('click', () => {
-                const id = card.getAttribute('data-id');
-                if (id)
-                    this.showMemoryDetail(id, results);
-            });
+            if (!card.hasAttribute('data-listener')) {
+                card.setAttribute('data-listener', 'true');
+                card.addEventListener('click', () => {
+                    const id = card.getAttribute('data-id');
+                    if (id)
+                        this.showMemoryDetail(id, this.currentSearchResults);
+                });
+            }
         });
+        // Add click handler for load more button
+        const loadMoreBtn = this.resultsContainer.querySelector('#load-more-search');
+        if (loadMoreBtn) {
+            loadMoreBtn.addEventListener('click', () => this.loadMoreSearch());
+        }
     }
     renderMemoryCard(result) {
         const { memory, score, highlights, source } = result;
