@@ -9,6 +9,10 @@ class ContextFSBrowser {
         this.db = null;
         this.apiBase = '/api';
         this.useSqlJs = false;
+        // Pagination state
+        this.sessionsOffset = 0;
+        this.sessionsPageSize = 20;
+        this.sessionsHasMore = true;
         this.initElements();
         this.initEventListeners();
         this.init();
@@ -411,22 +415,33 @@ class ContextFSBrowser {
             });
         });
     }
-    async loadSessions() {
+    async loadSessions(reset = true) {
         try {
+            if (reset) {
+                this.sessionsOffset = 0;
+                this.sessionsHasMore = true;
+                this.sessionsContainer.innerHTML = '<div class="loading"></div>';
+            }
             let sessions;
             if (this.useSqlJs && this.db) {
-                sessions = this.getSessionsLocal(20);
+                sessions = this.getSessionsLocal(this.sessionsPageSize, this.sessionsOffset);
             }
             else {
-                sessions = await this.getSessionsAPI(20);
+                sessions = await this.getSessionsAPI(this.sessionsPageSize, this.sessionsOffset);
             }
-            this.renderSessions(sessions);
+            // Check if there are more sessions
+            this.sessionsHasMore = sessions.length === this.sessionsPageSize;
+            this.sessionsOffset += sessions.length;
+            this.renderSessions(sessions, !reset);
         }
         catch (error) {
             this.sessionsContainer.innerHTML = `<p class="placeholder">Error loading sessions</p>`;
         }
     }
-    getSessionsLocal(limit = 20) {
+    async loadMoreSessions() {
+        await this.loadSessions(false);
+    }
+    getSessionsLocal(limit = 20, offset = 0) {
         if (!this.db)
             return [];
         const results = this.db.exec(`SELECT s.*, COUNT(m.id) as message_count
@@ -434,25 +449,25 @@ class ContextFSBrowser {
              LEFT JOIN messages m ON s.id = m.session_id
              GROUP BY s.id
              ORDER BY s.started_at DESC
-             LIMIT ${limit}`);
+             LIMIT ${limit} OFFSET ${offset}`);
         if (!results.length || !results[0].values.length)
             return [];
         return results[0].values.map((row) => this.rowToSession(results[0].columns, row));
     }
-    async getSessionsAPI(limit = 20) {
-        const response = await fetch(`${this.apiBase}/sessions?limit=${limit}`);
+    async getSessionsAPI(limit = 20, offset = 0) {
+        const response = await fetch(`${this.apiBase}/sessions?limit=${limit}&offset=${offset}`);
         const data = await response.json();
         if (!data.success || !data.data) {
             throw new Error(data.error || 'Failed to load sessions');
         }
         return data.data;
     }
-    renderSessions(sessions) {
-        if (!sessions.length) {
+    renderSessions(sessions, append = false) {
+        if (!sessions.length && !append) {
             this.sessionsContainer.innerHTML = '<p class="placeholder">No sessions yet</p>';
             return;
         }
-        this.sessionsContainer.innerHTML = sessions.map((s) => `
+        const sessionsHtml = sessions.map((s) => `
             <div class="session-card" data-id="${s.id}">
                 <div class="session-header">
                     <span class="session-tool">${this.escapeHtml(s.tool)}</span>
@@ -464,13 +479,36 @@ class ContextFSBrowser {
                 </div>
             </div>
         `).join('');
+        const loadMoreHtml = this.sessionsHasMore ? `
+            <button class="load-more-btn" id="load-more-sessions">Load More Sessions</button>
+        ` : '';
+        if (append) {
+            // Remove old load more button if exists
+            const oldBtn = this.sessionsContainer.querySelector('#load-more-sessions');
+            if (oldBtn)
+                oldBtn.remove();
+            // Append new sessions
+            this.sessionsContainer.insertAdjacentHTML('beforeend', sessionsHtml + loadMoreHtml);
+        }
+        else {
+            this.sessionsContainer.innerHTML = sessionsHtml + loadMoreHtml;
+        }
+        // Add click handlers for session cards
         this.sessionsContainer.querySelectorAll('.session-card').forEach((card) => {
-            card.addEventListener('click', () => {
-                const id = card.getAttribute('data-id');
-                if (id)
-                    this.showSessionDetail(id);
-            });
+            if (!card.hasAttribute('data-listener')) {
+                card.setAttribute('data-listener', 'true');
+                card.addEventListener('click', () => {
+                    const id = card.getAttribute('data-id');
+                    if (id)
+                        this.showSessionDetail(id);
+                });
+            }
         });
+        // Add click handler for load more button
+        const loadMoreBtn = this.sessionsContainer.querySelector('#load-more-sessions');
+        if (loadMoreBtn) {
+            loadMoreBtn.addEventListener('click', () => this.loadMoreSessions());
+        }
     }
     // ==================== Stats ====================
     async loadStats() {

@@ -401,6 +401,7 @@ def create_app(
     @app.get("/api/sessions", response_model=APIResponse)
     async def list_sessions(
         limit: int = Query(20, ge=1, le=100),
+        offset: int = Query(0, ge=0),
         tool: str | None = None,
     ):
         """List sessions."""
@@ -410,6 +411,7 @@ def create_app(
             sessions = await asyncio.to_thread(
                 ctx.list_sessions,
                 limit=limit,
+                offset=offset,
                 tool=tool,
             )
 

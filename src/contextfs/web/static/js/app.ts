@@ -24,6 +24,11 @@ class ContextFSBrowser {
     private apiBase: string = '/api';
     private useSqlJs: boolean = false;
 
+    // Pagination state
+    private sessionsOffset: number = 0;
+    private sessionsPageSize: number = 20;
+    private sessionsHasMore: boolean = true;
+
     // DOM elements
     private searchInput!: HTMLInputElement;
     private searchBtn!: HTMLButtonElement;
@@ -516,23 +521,37 @@ class ContextFSBrowser {
         });
     }
 
-    private async loadSessions(): Promise<void> {
+    private async loadSessions(reset: boolean = true): Promise<void> {
         try {
+            if (reset) {
+                this.sessionsOffset = 0;
+                this.sessionsHasMore = true;
+                this.sessionsContainer.innerHTML = '<div class="loading"></div>';
+            }
+
             let sessions: Session[];
 
             if (this.useSqlJs && this.db) {
-                sessions = this.getSessionsLocal(20);
+                sessions = this.getSessionsLocal(this.sessionsPageSize, this.sessionsOffset);
             } else {
-                sessions = await this.getSessionsAPI(20);
+                sessions = await this.getSessionsAPI(this.sessionsPageSize, this.sessionsOffset);
             }
 
-            this.renderSessions(sessions);
+            // Check if there are more sessions
+            this.sessionsHasMore = sessions.length === this.sessionsPageSize;
+            this.sessionsOffset += sessions.length;
+
+            this.renderSessions(sessions, !reset);
         } catch (error) {
             this.sessionsContainer.innerHTML = `<p class="placeholder">Error loading sessions</p>`;
         }
     }
 
-    private getSessionsLocal(limit: number = 20): Session[] {
+    private async loadMoreSessions(): Promise<void> {
+        await this.loadSessions(false);
+    }
+
+    private getSessionsLocal(limit: number = 20, offset: number = 0): Session[] {
         if (!this.db) return [];
 
         const results = this.db.exec(
@@ -541,7 +560,7 @@ class ContextFSBrowser {
              LEFT JOIN messages m ON s.id = m.session_id
              GROUP BY s.id
              ORDER BY s.started_at DESC
-             LIMIT ${limit}`
+             LIMIT ${limit} OFFSET ${offset}`
         );
 
         if (!results.length || !results[0].values.length) return [];
@@ -549,8 +568,8 @@ class ContextFSBrowser {
         return results[0].values.map((row) => this.rowToSession(results[0].columns, row));
     }
 
-    private async getSessionsAPI(limit: number = 20): Promise<Session[]> {
-        const response = await fetch(`${this.apiBase}/sessions?limit=${limit}`);
+    private async getSessionsAPI(limit: number = 20, offset: number = 0): Promise<Session[]> {
+        const response = await fetch(`${this.apiBase}/sessions?limit=${limit}&offset=${offset}`);
         const data: APIResponse<Session[]> = await response.json();
 
         if (!data.success || !data.data) {
@@ -560,13 +579,13 @@ class ContextFSBrowser {
         return data.data;
     }
 
-    private renderSessions(sessions: Session[]): void {
-        if (!sessions.length) {
+    private renderSessions(sessions: Session[], append: boolean = false): void {
+        if (!sessions.length && !append) {
             this.sessionsContainer.innerHTML = '<p class="placeholder">No sessions yet</p>';
             return;
         }
 
-        this.sessionsContainer.innerHTML = sessions.map((s) => `
+        const sessionsHtml = sessions.map((s) => `
             <div class="session-card" data-id="${s.id}">
                 <div class="session-header">
                     <span class="session-tool">${this.escapeHtml(s.tool)}</span>
@@ -579,12 +598,36 @@ class ContextFSBrowser {
             </div>
         `).join('');
 
+        const loadMoreHtml = this.sessionsHasMore ? `
+            <button class="load-more-btn" id="load-more-sessions">Load More Sessions</button>
+        ` : '';
+
+        if (append) {
+            // Remove old load more button if exists
+            const oldBtn = this.sessionsContainer.querySelector('#load-more-sessions');
+            if (oldBtn) oldBtn.remove();
+            // Append new sessions
+            this.sessionsContainer.insertAdjacentHTML('beforeend', sessionsHtml + loadMoreHtml);
+        } else {
+            this.sessionsContainer.innerHTML = sessionsHtml + loadMoreHtml;
+        }
+
+        // Add click handlers for session cards
         this.sessionsContainer.querySelectorAll('.session-card').forEach((card) => {
-            card.addEventListener('click', () => {
-                const id = card.getAttribute('data-id');
-                if (id) this.showSessionDetail(id);
-            });
+            if (!card.hasAttribute('data-listener')) {
+                card.setAttribute('data-listener', 'true');
+                card.addEventListener('click', () => {
+                    const id = card.getAttribute('data-id');
+                    if (id) this.showSessionDetail(id);
+                });
+            }
         });
+
+        // Add click handler for load more button
+        const loadMoreBtn = this.sessionsContainer.querySelector('#load-more-sessions');
+        if (loadMoreBtn) {
+            loadMoreBtn.addEventListener('click', () => this.loadMoreSessions());
+        }
     }
 
     // ==================== Stats ====================

@@ -953,6 +953,7 @@ class ContextFS:
     def list_sessions(
         self,
         limit: int = 10,
+        offset: int = 0,
         tool: str | None = None,
         label: str | None = None,
         all_namespaces: bool = False,
@@ -976,7 +977,7 @@ class ContextFS:
             sql += " AND label LIKE ?"
             params.append(f"%{label}%")
 
-        sql += f" ORDER BY started_at DESC LIMIT {limit}"
+        sql += f" ORDER BY started_at DESC LIMIT {limit} OFFSET {offset}"
 
         cursor.execute(sql, params)
         rows = cursor.fetchall()

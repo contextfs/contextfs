@@ -436,6 +436,27 @@ footer {
     padding: 40px;
 }
 
+/* Load More Button */
+.load-more-btn {
+    display: block;
+    width: 100%;
+    padding: 12px 20px;
+    margin-top: 16px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+
+.load-more-btn:hover {
+    color: var(--text);
+    border-color: var(--accent);
+    background: var(--bg-secondary);
+}
+
 /* Loading */
 .loading {
     display: inline-block;
