@@ -670,23 +670,135 @@ class ContextFSBrowser {
         if (!result)
             return;
         const { memory } = result;
+        this.currentMemory = memory;
         this.modalBody.innerHTML = `
             <div class="modal-header">
                 <span class="memory-type ${memory.type}">${memory.type}</span>
                 <h3>${memory.summary || `Memory ${memory.id.substring(0, 8)}`}</h3>
             </div>
-            <div class="modal-body">
+            <div class="modal-body" id="memory-view-mode">
                 <pre>${this.escapeHtml(memory.content)}</pre>
                 <div class="memory-meta" style="margin-top: 16px;">
                     <p><strong>ID:</strong> ${memory.id}</p>
                     <p><strong>Namespace:</strong> ${memory.namespace_id}</p>
+                    <p><strong>Project:</strong> ${memory.project || 'none'}</p>
                     <p><strong>Created:</strong> ${this.formatDate(memory.created_at)}</p>
                     ${memory.tags.length ? `<p><strong>Tags:</strong> ${memory.tags.join(', ')}</p>` : ''}
                     ${memory.source_file ? `<p><strong>Source:</strong> ${memory.source_file}</p>` : ''}
                 </div>
             </div>
+            <div class="modal-body" id="memory-edit-mode" style="display: none;">
+                <div class="form-group">
+                    <label>Content</label>
+                    <textarea id="edit-memory-content" rows="6">${this.escapeHtml(memory.content)}</textarea>
+                </div>
+                <div class="form-group">
+                    <label>Summary</label>
+                    <input type="text" id="edit-memory-summary" value="${this.escapeHtml(memory.summary || '')}">
+                </div>
+                <div class="form-group">
+                    <label>Type</label>
+                    <select id="edit-memory-type">
+                        ${['fact', 'decision', 'procedural', 'episodic', 'user', 'code', 'error'].map(t =>
+                            `<option value="${t}" ${memory.type === t ? 'selected' : ''}>${t}</option>`
+                        ).join('')}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Tags (comma-separated)</label>
+                    <input type="text" id="edit-memory-tags" value="${memory.tags.join(', ')}">
+                </div>
+                <div class="form-group">
+                    <label>Project</label>
+                    <input type="text" id="edit-memory-project" value="${this.escapeHtml(memory.project || '')}">
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="btn-edit-memory" class="btn-secondary">Edit</button>
+                <button id="btn-save-memory" class="btn-primary" style="display: none;">Save</button>
+                <button id="btn-cancel-edit" class="btn-secondary" style="display: none;">Cancel</button>
+                <button id="btn-delete-memory" class="btn-danger">Delete</button>
+            </div>
         `;
         this.modal.classList.add('active');
+
+        // Add event listeners
+        document.getElementById('btn-edit-memory')?.addEventListener('click', () => this.enterMemoryEditMode());
+        document.getElementById('btn-save-memory')?.addEventListener('click', () => this.saveMemory());
+        document.getElementById('btn-cancel-edit')?.addEventListener('click', () => this.exitMemoryEditMode());
+        document.getElementById('btn-delete-memory')?.addEventListener('click', () => this.deleteMemory(memory.id));
+    }
+
+    enterMemoryEditMode() {
+        document.getElementById('memory-view-mode').style.display = 'none';
+        document.getElementById('memory-edit-mode').style.display = 'block';
+        document.getElementById('btn-edit-memory').style.display = 'none';
+        document.getElementById('btn-save-memory').style.display = 'inline-block';
+        document.getElementById('btn-cancel-edit').style.display = 'inline-block';
+        document.getElementById('btn-delete-memory').style.display = 'none';
+    }
+
+    exitMemoryEditMode() {
+        document.getElementById('memory-view-mode').style.display = 'block';
+        document.getElementById('memory-edit-mode').style.display = 'none';
+        document.getElementById('btn-edit-memory').style.display = 'inline-block';
+        document.getElementById('btn-save-memory').style.display = 'none';
+        document.getElementById('btn-cancel-edit').style.display = 'none';
+        document.getElementById('btn-delete-memory').style.display = 'inline-block';
+    }
+
+    async saveMemory() {
+        if (!this.currentMemory) return;
+
+        const content = document.getElementById('edit-memory-content')?.value;
+        const summary = document.getElementById('edit-memory-summary')?.value;
+        const type = document.getElementById('edit-memory-type')?.value;
+        const tagsStr = document.getElementById('edit-memory-tags')?.value;
+        const project = document.getElementById('edit-memory-project')?.value;
+
+        const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(t => t) : [];
+
+        try {
+            const response = await fetch(`${this.apiBase}/memories/${this.currentMemory.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content, summary, type, tags, project: project || null }),
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                this.closeModal();
+                await this.loadRecent();
+                await this.showRecentInSearch();
+                alert('Memory updated successfully');
+            } else {
+                throw new Error(data.error || 'Update failed');
+            }
+        } catch (error) {
+            alert(`Failed to update memory: ${error.message}`);
+        }
+    }
+
+    async deleteMemory(id) {
+        if (!confirm('Are you sure you want to delete this memory?')) return;
+
+        try {
+            const response = await fetch(`${this.apiBase}/memories/${id}`, {
+                method: 'DELETE',
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                this.closeModal();
+                await this.loadRecent();
+                await this.showRecentInSearch();
+                alert('Memory deleted successfully');
+            } else {
+                throw new Error(data.error || 'Delete failed');
+            }
+        } catch (error) {
+            alert(`Failed to delete memory: ${error.message}`);
+        }
     }
     async showSessionDetail(id) {
         // Load session messages from API or local DB
@@ -699,24 +811,123 @@ class ContextFSBrowser {
                 throw new Error(data.error || 'Failed to load session');
             }
             const session = data.data;
+            this.currentSession = session;
             const messages = session.messages || [];
             this.modalBody.innerHTML = `
                 <div class="modal-header">
-                    <h3>${session.label || `Session ${session.id.substring(0, 8)}`}</h3>
+                    <h3 id="session-title">${session.label || `Session ${session.id.substring(0, 8)}`}</h3>
                     <p class="text-muted">${session.tool} • ${this.formatDate(session.started_at)}</p>
                 </div>
-                <div class="modal-body">
-                    ${messages.map((m) => `
-                        <div class="message ${m.role}">
-                            <strong>${m.role}:</strong>
-                            <p>${this.escapeHtml(m.content)}</p>
+                <div class="modal-body" id="session-view-mode">
+                    <div class="session-info">
+                        <p><strong>ID:</strong> ${session.id}</p>
+                        <p><strong>Label:</strong> ${session.label || 'none'}</p>
+                        <p><strong>Summary:</strong> ${session.summary || 'none'}</p>
+                        <p><strong>Messages:</strong> ${messages.length}</p>
+                    </div>
+                    ${messages.length ? `
+                        <h4>Messages</h4>
+                        <div class="messages-list">
+                            ${messages.map((m) => `
+                                <div class="message ${m.role}">
+                                    <strong>${m.role}:</strong>
+                                    <p>${this.escapeHtml(m.content)}</p>
+                                </div>
+                            `).join('')}
                         </div>
-                    `).join('')}
+                    ` : '<p class="text-muted">No messages in this session</p>'}
+                </div>
+                <div class="modal-body" id="session-edit-mode" style="display: none;">
+                    <div class="form-group">
+                        <label>Label</label>
+                        <input type="text" id="edit-session-label" value="${this.escapeHtml(session.label || '')}">
+                    </div>
+                    <div class="form-group">
+                        <label>Summary</label>
+                        <textarea id="edit-session-summary" rows="3">${this.escapeHtml(session.summary || '')}</textarea>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button id="btn-edit-session" class="btn-secondary">Edit</button>
+                    <button id="btn-save-session" class="btn-primary" style="display: none;">Save</button>
+                    <button id="btn-cancel-session-edit" class="btn-secondary" style="display: none;">Cancel</button>
+                    <button id="btn-delete-session" class="btn-danger">Delete</button>
                 </div>
             `;
+
+            // Add event listeners
+            document.getElementById('btn-edit-session')?.addEventListener('click', () => this.enterSessionEditMode());
+            document.getElementById('btn-save-session')?.addEventListener('click', () => this.saveSession());
+            document.getElementById('btn-cancel-session-edit')?.addEventListener('click', () => this.exitSessionEditMode());
+            document.getElementById('btn-delete-session')?.addEventListener('click', () => this.deleteSession(session.id));
         }
         catch (error) {
             this.modalBody.innerHTML = `<p class="placeholder">Error: ${error.message}</p>`;
+        }
+    }
+
+    enterSessionEditMode() {
+        document.getElementById('session-view-mode').style.display = 'none';
+        document.getElementById('session-edit-mode').style.display = 'block';
+        document.getElementById('btn-edit-session').style.display = 'none';
+        document.getElementById('btn-save-session').style.display = 'inline-block';
+        document.getElementById('btn-cancel-session-edit').style.display = 'inline-block';
+        document.getElementById('btn-delete-session').style.display = 'none';
+    }
+
+    exitSessionEditMode() {
+        document.getElementById('session-view-mode').style.display = 'block';
+        document.getElementById('session-edit-mode').style.display = 'none';
+        document.getElementById('btn-edit-session').style.display = 'inline-block';
+        document.getElementById('btn-save-session').style.display = 'none';
+        document.getElementById('btn-cancel-session-edit').style.display = 'none';
+        document.getElementById('btn-delete-session').style.display = 'inline-block';
+    }
+
+    async saveSession() {
+        if (!this.currentSession) return;
+
+        const label = document.getElementById('edit-session-label')?.value;
+        const summary = document.getElementById('edit-session-summary')?.value;
+
+        try {
+            const response = await fetch(`${this.apiBase}/sessions/${this.currentSession.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ label: label || null, summary: summary || null }),
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                this.closeModal();
+                await this.loadSessions(true);
+                alert('Session updated successfully');
+            } else {
+                throw new Error(data.error || 'Update failed');
+            }
+        } catch (error) {
+            alert(`Failed to update session: ${error.message}`);
+        }
+    }
+
+    async deleteSession(id) {
+        if (!confirm('Are you sure you want to delete this session and all its messages?')) return;
+
+        try {
+            const response = await fetch(`${this.apiBase}/sessions/${id}`, {
+                method: 'DELETE',
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                this.closeModal();
+                await this.loadSessions(true);
+                alert('Session deleted successfully');
+            } else {
+                throw new Error(data.error || 'Delete failed');
+            }
+        } catch (error) {
+            alert(`Failed to delete session: ${error.message}`);
         }
     }
     closeModal() {

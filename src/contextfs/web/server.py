@@ -43,6 +43,19 @@ class MemoryCreate(BaseModel):
     metadata: dict = Field(default_factory=dict)
 
 
+class MemoryUpdate(BaseModel):
+    content: str | None = None
+    type: str | None = None
+    tags: list[str] | None = None
+    summary: str | None = None
+    project: str | None = None
+
+
+class SessionUpdate(BaseModel):
+    label: str | None = None
+    summary: str | None = None
+
+
 class MemoryResponse(BaseModel):
     id: str
     content: str
@@ -402,6 +415,41 @@ def create_app(
             logger.exception("Delete memory error")
             return APIResponse(success=False, error=str(e))
 
+    @app.put("/api/memories/{memory_id}", response_model=APIResponse)
+    async def update_memory(memory_id: str, data: MemoryUpdate):
+        """Update a memory."""
+        ctx = get_ctx()
+
+        try:
+            memory_type = MemoryType(data.type) if data.type else None
+
+            memory = await asyncio.to_thread(
+                ctx.update,
+                memory_id=memory_id,
+                content=data.content,
+                type=memory_type,
+                tags=data.tags,
+                summary=data.summary,
+                project=data.project,
+            )
+
+            if memory:
+                await ws_manager.broadcast(
+                    {
+                        "type": "memory_updated",
+                        "memory": serialize_memory(memory),
+                    }
+                )
+                return APIResponse(success=True, data=serialize_memory(memory))
+            else:
+                raise HTTPException(status_code=404, detail="Memory not found")
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Update memory error")
+            return APIResponse(success=False, error=str(e))
+
     # ==================== Session API ====================
 
     @app.get("/api/sessions", response_model=APIResponse)
@@ -460,6 +508,61 @@ def create_app(
             raise
         except Exception as e:
             logger.exception("Get session error")
+            return APIResponse(success=False, error=str(e))
+
+    @app.put("/api/sessions/{session_id}", response_model=APIResponse)
+    async def update_session(session_id: str, data: SessionUpdate):
+        """Update a session."""
+        ctx = get_ctx()
+
+        try:
+            session = await asyncio.to_thread(
+                ctx.update_session,
+                session_id=session_id,
+                label=data.label,
+                summary=data.summary,
+            )
+
+            if session:
+                await ws_manager.broadcast(
+                    {
+                        "type": "session_updated",
+                        "session": serialize_session(session),
+                    }
+                )
+                return APIResponse(success=True, data=serialize_session(session))
+            else:
+                raise HTTPException(status_code=404, detail="Session not found")
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Update session error")
+            return APIResponse(success=False, error=str(e))
+
+    @app.delete("/api/sessions/{session_id}", response_model=APIResponse)
+    async def delete_session(session_id: str):
+        """Delete a session."""
+        ctx = get_ctx()
+
+        try:
+            deleted = await asyncio.to_thread(ctx.delete_session, session_id)
+
+            if deleted:
+                await ws_manager.broadcast(
+                    {
+                        "type": "session_deleted",
+                        "id": session_id,
+                    }
+                )
+                return APIResponse(success=True)
+            else:
+                raise HTTPException(status_code=404, detail="Session not found")
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Delete session error")
             return APIResponse(success=False, error=str(e))
 
     # ==================== Stats & Utility API ====================

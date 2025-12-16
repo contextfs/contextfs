@@ -7,6 +7,7 @@
       members:
         - __init__
         - save
+        - update
         - search
         - recall
         - delete
@@ -16,6 +17,8 @@
         - clear_index
         - start_session
         - end_session
+        - update_session
+        - delete_session
         - log_message
         - get_current_session
         - list_sessions

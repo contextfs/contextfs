@@ -524,6 +524,166 @@ footer {
     border: 1px solid rgba(180, 130, 255, 0.4);
 }
 
+/* Modal Actions */
+.modal-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+
+/* Buttons */
+.btn-primary {
+    padding: 8px 16px;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 13px;
+    transition: background 0.2s;
+}
+
+.btn-primary:hover {
+    background: var(--accent-hover);
+}
+
+.btn-secondary {
+    padding: 8px 16px;
+    background: var(--bg-tertiary);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+
+.btn-secondary:hover {
+    border-color: var(--accent);
+}
+
+.btn-danger {
+    padding: 8px 16px;
+    background: transparent;
+    color: var(--error);
+    border: 1px solid var(--error);
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+
+.btn-danger:hover {
+    background: var(--error);
+    color: var(--bg);
+}
+
+/* Form Groups */
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 500;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+}
+
+.form-group input,
+.form-group textarea,
+.form-group select {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+}
+
+.form-group input:focus,
+.form-group textarea:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.15);
+}
+
+.form-group textarea {
+    resize: vertical;
+    min-height: 80px;
+}
+
+/* Session Info */
+.session-info {
+    background: var(--bg);
+    padding: 12px;
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+}
+
+.session-info p {
+    margin-bottom: 4px;
+    font-size: 13px;
+}
+
+.session-info p:last-child {
+    margin-bottom: 0;
+}
+
+/* Messages list */
+.messages-list {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.message {
+    padding: 12px;
+    margin-bottom: 8px;
+    background: var(--bg);
+    border-radius: var(--radius);
+    border-left: 3px solid var(--border);
+}
+
+.message.user {
+    border-left-color: var(--user);
+}
+
+.message.assistant {
+    border-left-color: var(--accent);
+}
+
+.message.system {
+    border-left-color: var(--warning);
+}
+
+.message strong {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+}
+
+.message p {
+    color: var(--text);
+    font-size: 13px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Text utilities */
+.text-muted {
+    color: var(--text-muted);
+}
+
 /* Responsive */
 @media (max-width: 600px) {
     .container {
@@ -550,5 +710,9 @@ footer {
 
     .dual-view {
         grid-template-columns: 1fr;
+    }
+
+    .modal-actions {
+        flex-wrap: wrap;
     }
 }

@@ -100,4 +100,6 @@ nav:
     - Claude Desktop: integration/claude-desktop.md
     - Claude Code: integration/claude-code.md
     - Custom Agents: integration/custom-agents.md
-  - API Reference: api/index.md
+  - API Reference:
+    - Python API: api/index.md
+    - Web API: api/web-api.md
