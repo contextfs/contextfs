@@ -49,3 +49,4 @@ htmlcov/
 .DS_Store
 *.log
 .claude/
+site/
