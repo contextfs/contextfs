@@ -8,7 +8,7 @@ Works with Claude Code, Claude Desktop, Gemini CLI, Codex CLI, and any MCP clien
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-**[Documentation](https://magnetonio.github.io/contextfs)** | **[Developer Memory Workflow Guide](DMW.md)** | **[GitHub](https://github.com/MagnetonIO/contextfs)**
+**[Documentation](https://magnetonio.github.io/contextfs)** | **[Developer Memory Workflow Guide](docs/DMW.md)** | **[GitHub](https://github.com/MagnetonIO/contextfs)**
 
 ## Features
 
@@ -263,7 +263,7 @@ results = ctx.search("CORS issues", type=MemoryType.ERROR)
 - **Solo**: Per-repo namespace, personal memory bank
 - **Team**: Shared namespace, collective knowledge base
 
-See the full **[Developer Memory Workflow Guide](DMW.md)** for detailed patterns.
+See the full **[Developer Memory Workflow Guide](docs/DMW.md)** for detailed patterns.
 
 ### Session & Memory Event Workflow
 

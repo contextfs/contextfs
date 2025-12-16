@@ -84,6 +84,7 @@ extra:
 
 nav:
   - Home: index.md
+  - Developer Memory Workflow: DMW.md
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
