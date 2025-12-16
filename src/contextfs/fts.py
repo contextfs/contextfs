@@ -130,9 +130,12 @@ class FTSBackend:
 
         # Build search query with BM25 ranking
         # Weight: content=10, summary=5, tags=2
+        # Explicitly select columns in expected order for _row_to_memory
         sql = """
             SELECT
-                m.*,
+                m.id, m.content, m.type, m.tags, m.summary, m.namespace_id,
+                m.source_file, m.source_repo, m.session_id, m.created_at,
+                m.updated_at, m.metadata,
                 bm25(memories_fts, 0, 10.0, 5.0, 2.0, 0, 0) as rank
             FROM memories m
             JOIN memories_fts fts ON m.id = fts.id
@@ -222,7 +225,10 @@ class FTSBackend:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        sql = "SELECT * FROM memories WHERE (content LIKE ? OR summary LIKE ?)"
+        sql = """SELECT id, content, type, tags, summary, namespace_id,
+                source_file, source_repo, session_id, created_at,
+                updated_at, metadata
+                FROM memories WHERE (content LIKE ? OR summary LIKE ?)"""
         params = [f"%{query}%", f"%{query}%"]
 
         if namespace_id:

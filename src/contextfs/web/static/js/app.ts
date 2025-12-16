@@ -115,6 +115,9 @@ class ContextFSBrowser {
         await this.loadRecent();
         await this.loadSessions();
         await this.loadStats();
+
+        // Show recent memories on the search tab initially
+        await this.showRecentInSearch();
     }
 
     private async initSqlJs(): Promise<void> {
@@ -145,8 +148,8 @@ class ContextFSBrowser {
     private async search(): Promise<void> {
         const query = this.searchInput.value.trim();
         if (!query) {
-            this.resultsContainer.innerHTML = '<p class="placeholder">Enter a search query to find memories</p>';
-            this.showSingleView();
+            // Show recent memories when no query
+            await this.showRecentInSearch();
             return;
         }
 
@@ -191,6 +194,40 @@ class ContextFSBrowser {
     private showDualView(): void {
         this.resultsContainer.style.display = 'none';
         this.dualResultsContainer.style.display = 'grid';
+    }
+
+    private async showRecentInSearch(): Promise<void> {
+        this.showSingleView();
+        this.resultsContainer.innerHTML = '<div class="loading"></div>';
+
+        try {
+            const memories = await this.getRecentAPI(10);
+            if (memories.length === 0) {
+                this.resultsContainer.innerHTML = '<p class="placeholder">No memories yet. Save some memories to get started!</p>';
+                return;
+            }
+
+            this.resultsContainer.innerHTML = '<h3 class="section-title">Recent Memories</h3>' +
+                memories.map((m) => this.renderMemoryCard({
+                    memory: m,
+                    score: 1.0,
+                    highlights: [],
+                })).join('');
+
+            this.resultsContainer.querySelectorAll('.memory-card').forEach((card) => {
+                card.addEventListener('click', () => {
+                    const id = card.getAttribute('data-id');
+                    if (id) {
+                        const memory = memories.find((m) => m.id === id);
+                        if (memory) {
+                            this.showMemoryDetail(id, [{ memory, score: 1.0, highlights: [] }]);
+                        }
+                    }
+                });
+            });
+        } catch (error) {
+            this.resultsContainer.innerHTML = `<p class="placeholder">Error loading memories: ${(error as Error).message}</p>`;
+        }
     }
 
     private searchLocal(

@@ -419,6 +419,16 @@ footer {
     border-color: var(--accent);
 }
 
+/* Section Title */
+.section-title {
+    color: var(--text-muted);
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
 /* Placeholder */
 .placeholder {
     color: var(--text-muted);
