@@ -19,6 +19,7 @@ from contextfs.schemas import (
     Session,
     SessionMessage,
 )
+from contextfs.storage_router import StorageRouter
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,12 @@ class ContextFS:
         self.rag = RAGBackend(
             data_dir=self.data_dir,
             embedding_model=self.config.embedding_model,
+        )
+
+        # Initialize unified storage router (keeps SQLite + ChromaDB in sync)
+        self.storage = StorageRouter(
+            db_path=self._db_path,
+            rag_backend=self.rag,
         )
 
         # Auto-indexing
@@ -264,7 +271,7 @@ class ContextFS:
             stats = indexer.index_repository(
                 repo_path=self._repo_path,
                 namespace_id=self.namespace_id,
-                rag_backend=self.rag,
+                storage=self.storage,
                 on_progress=on_progress,
                 incremental=True,
             )
@@ -319,7 +326,7 @@ class ContextFS:
         return indexer.index_repository(
             repo_path=path,
             namespace_id=namespace_id,
-            rag_backend=self.rag,
+            storage=self.storage,
             on_progress=on_progress,
             incremental=incremental,
             project=project,
@@ -384,7 +391,7 @@ class ContextFS:
         indexer = self._get_auto_indexer()
         return indexer.index_directory(
             root_dir=root_dir,
-            rag_backend=self.rag,
+            storage=self.storage,
             max_depth=max_depth,
             on_progress=on_progress,
             on_repo_start=on_repo_start,
@@ -787,22 +794,16 @@ class ContextFS:
         """
         Recall a specific memory by ID.
 
+        Checks SQLite first, then falls back to ChromaDB for indexed memories.
+
         Args:
             memory_id: Memory ID (can be partial, at least 8 chars)
 
         Returns:
             Memory or None
         """
-        conn = sqlite3.connect(self._db_path)
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT * FROM memories WHERE id LIKE ?", (f"{memory_id}%",))
-        row = cursor.fetchone()
-        conn.close()
-
-        if row:
-            return self._row_to_memory(row)
-        return None
+        # Use StorageRouter for unified recall (SQLite + ChromaDB fallback)
+        return self.storage.recall(memory_id)
 
     def list_recent(
         self,
@@ -1322,6 +1323,42 @@ class ContextFS:
         return self._current_session
 
     # ==================== Cleanup ====================
+
+    def reset_chromadb(self) -> bool:
+        """
+        Reset the ChromaDB database.
+
+        Use this when ChromaDB becomes corrupted (e.g., after version upgrades).
+        This will delete all vector embeddings but SQLite data remains intact.
+        After reset, you should re-index to rebuild the ChromaDB database.
+
+        Returns:
+            True if reset successful, False otherwise
+        """
+        return self.rag.reset_database()
+
+    def rebuild_chromadb(
+        self,
+        on_progress: callable = None,
+    ) -> dict:
+        """
+        Rebuild ChromaDB from SQLite data.
+
+        Use this to restore search capability after ChromaDB corruption
+        without needing to re-index from source files.
+
+        This is MUCH faster than re-indexing because:
+        - No file scanning needed
+        - No file content processing
+        - Memories already exist in SQLite
+
+        Args:
+            on_progress: Callback for progress updates (current, total)
+
+        Returns:
+            Statistics dict with count of memories rebuilt
+        """
+        return self.storage.rebuild_chromadb_from_sqlite(on_progress=on_progress)
 
     def close(self) -> None:
         """Clean shutdown."""

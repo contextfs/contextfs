@@ -482,6 +482,9 @@ def index(
     background: bool = typer.Option(
         False, "--background", "-b", help="Run indexing in background (for hooks)"
     ),
+    reset_chroma: bool = typer.Option(
+        False, "--reset-chroma", help="Reset ChromaDB before indexing (use if corrupted)"
+    ),
 ):
     """Index a repository's codebase for semantic search."""
     import subprocess
@@ -529,6 +532,20 @@ def index(
         raise typer.Exit(1)
 
     ctx = get_ctx()
+
+    # Reset ChromaDB if requested (fixes corruption issues)
+    if reset_chroma:
+        if not quiet:
+            console.print("[yellow]Resetting ChromaDB (fixing corruption)...[/yellow]")
+        if ctx.reset_chromadb():
+            if not quiet:
+                console.print("[green]ChromaDB reset successfully[/green]")
+            force = True  # Force full re-index after reset
+            incremental = False
+        else:
+            if not quiet:
+                console.print("[red]Failed to reset ChromaDB[/red]")
+            raise typer.Exit(1)
 
     # Check if already indexed
     status = ctx.get_index_status()
@@ -832,6 +849,115 @@ def serve():
 
     # MCP uses stdout for JSON-RPC - no printing allowed
     mcp_main()
+
+
+@app.command("reset-chroma")
+def reset_chroma(
+    confirm: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+):
+    """Reset the ChromaDB database.
+
+    Use this when ChromaDB becomes corrupted (e.g., after version upgrades).
+    This will delete all vector embeddings but SQLite memories remain intact.
+
+    After reset, run 'contextfs rebuild-chroma' to restore search from SQLite.
+
+    Common symptoms of corruption:
+    - "Error in compaction" errors during indexing
+    - "mismatched types" errors
+    - Indexing shows 0 files/memories created despite discovering files
+    """
+    if not confirm:
+        console.print("[yellow]This will delete the ChromaDB vector database.[/yellow]")
+        console.print("Your memories in SQLite will be preserved.")
+        console.print("After reset, run 'contextfs rebuild-chroma' to restore search.\n")
+
+        if not typer.confirm("Proceed with reset?"):
+            console.print("[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+
+    ctx = get_ctx()
+
+    console.print("[cyan]Resetting ChromaDB...[/cyan]")
+
+    if ctx.reset_chromadb():
+        console.print("[green]✅ ChromaDB reset successfully![/green]")
+        console.print("\nNext steps:")
+        console.print("  1. Run [cyan]contextfs rebuild-chroma[/cyan] to restore search (fast)")
+        console.print("  2. Or run [cyan]contextfs index -f[/cyan] to fully re-index from files")
+    else:
+        console.print("[red]❌ Failed to reset ChromaDB[/red]")
+        raise typer.Exit(1)
+
+
+@app.command("rebuild-chroma")
+def rebuild_chroma(
+    confirm: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+):
+    """Rebuild ChromaDB search index from SQLite data.
+
+    Use this to restore search capability after ChromaDB corruption.
+    This is MUCH faster than 'index -f' because it rebuilds from SQLite
+    rather than re-scanning all source files.
+
+    This command:
+    - Preserves all your memories (they're safe in SQLite)
+    - Restores semantic search functionality
+    - Does NOT re-index source files (use 'index' for that)
+
+    Example:
+        contextfs rebuild-chroma        # Interactive confirmation
+        contextfs rebuild-chroma -y     # Skip confirmation
+    """
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+
+    if not confirm:
+        console.print("[cyan]This will rebuild ChromaDB from your SQLite memories.[/cyan]")
+        console.print("This is safe - your memories will not be affected.\n")
+
+        if not typer.confirm("Proceed with rebuild?"):
+            console.print("[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+
+    ctx = get_ctx()
+
+    console.print("\n[bold]Rebuilding ChromaDB from SQLite...[/bold]\n")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Rebuilding...", total=None)
+
+        def on_progress(current: int, total: int):
+            progress.update(
+                task,
+                total=total,
+                completed=current,
+                description=f"[cyan]Rebuilding memories ({current}/{total})[/cyan]",
+            )
+
+        result = ctx.rebuild_chromadb(on_progress=on_progress)
+
+    if result.get("success"):
+        console.print("\n[green]✅ ChromaDB rebuilt successfully![/green]\n")
+
+        table = Table(title="Rebuild Results")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Count", style="green", justify="right")
+
+        table.add_row("Total memories", str(result.get("total", 0)))
+        table.add_row("Rebuilt", str(result.get("rebuilt", 0)))
+        if result.get("errors", 0) > 0:
+            table.add_row("Errors", str(result.get("errors", 0)))
+
+        console.print(table)
+    else:
+        console.print(f"[red]❌ Rebuild failed: {result.get('error', 'Unknown error')}[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()

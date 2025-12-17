@@ -19,6 +19,7 @@ from contextfs.filetypes.integration import SmartDocumentProcessor
 from contextfs.filetypes.registry import FileTypeRegistry
 from contextfs.rag import RAGBackend
 from contextfs.schemas import Memory, MemoryType
+from contextfs.storage_router import StorageRouter
 
 logger = logging.getLogger(__name__)
 
@@ -490,27 +491,34 @@ class AutoIndexer:
         self,
         repo_path: Path,
         namespace_id: str,
-        rag_backend: RAGBackend,
+        rag_backend: RAGBackend | None = None,
         on_progress: Callable[[int, int, str], None] | None = None,
         incremental: bool = True,
         project: str | None = None,
         source_repo: str | None = None,
+        storage: StorageRouter | None = None,
     ) -> dict:
         """
-        Index all files in repository to ChromaDB (vector store).
+        Index all files in repository to both SQLite and ChromaDB.
 
         Args:
             repo_path: Repository root path
             namespace_id: Namespace for memories
-            rag_backend: RAG backend (ChromaDB) for vector storage
+            rag_backend: DEPRECATED - use storage instead
             on_progress: Callback for progress updates (current, total, file)
             incremental: Only index new/changed files
             project: Project name for grouping memories across repos
             source_repo: Repository name (default: repo_path.name)
+            storage: StorageRouter for unified SQLite + ChromaDB storage
 
         Returns:
             Indexing statistics
         """
+        # Handle storage parameter (new) vs rag_backend (deprecated)
+        # If neither provided, this is an error
+        if storage is None and rag_backend is None:
+            raise ValueError("Either storage or rag_backend must be provided")
+
         # Default source_repo to directory name
         if source_repo is None:
             source_repo = repo_path.name
@@ -592,7 +600,13 @@ class AutoIndexer:
 
                 # Batch add all memories for this file (much faster)
                 try:
-                    if hasattr(rag_backend, "add_memories_batch"):
+                    if storage is not None:
+                        # Use unified storage (saves to both SQLite and ChromaDB)
+                        added = storage.save_batch(file_memory_list)
+                        memories_created += added
+                        file_memories = added
+                    elif hasattr(rag_backend, "add_memories_batch"):
+                        # DEPRECATED: ChromaDB-only path (for backwards compatibility)
                         added = rag_backend.add_memories_batch(file_memory_list)
                         memories_created += added
                         file_memories = added
@@ -601,7 +615,10 @@ class AutoIndexer:
                         file_memories = 0
                         for memory in file_memory_list:
                             try:
-                                rag_backend.add_memory(memory)
+                                if storage is not None:
+                                    storage.save(memory)
+                                else:
+                                    rag_backend.add_memory(memory)
                                 file_memories += 1
                                 memories_created += 1
                             except Exception as e:
@@ -634,6 +651,7 @@ class AutoIndexer:
             incremental=incremental,
             project=project,
             source_repo=source_repo,
+            storage=storage,
         )
         memories_created += git_stats["memories_created"]
         commits_indexed = git_stats["commits_indexed"]
@@ -728,25 +746,27 @@ class AutoIndexer:
         self,
         repo_path: Path,
         namespace_id: str,
-        rag_backend: RAGBackend,
+        rag_backend: RAGBackend | None = None,
         max_commits: int = 100,
         on_progress: Callable[[int, int, str], None] | None = None,
         incremental: bool = True,
         project: str | None = None,
         source_repo: str | None = None,
+        storage: StorageRouter | None = None,
     ) -> dict:
         """
-        Index git commit history to RAG backend.
+        Index git commit history to both SQLite and ChromaDB.
 
         Args:
             repo_path: Repository root path
             namespace_id: Namespace for memories
-            rag_backend: RAG backend for vector storage
+            rag_backend: DEPRECATED - use storage instead
             max_commits: Maximum commits to index
             on_progress: Progress callback
             incremental: Only index new commits
             project: Project name for grouping memories
             source_repo: Repository name
+            storage: StorageRouter for unified storage
 
         Returns:
             Indexing statistics
@@ -815,7 +835,12 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
             )
 
             try:
-                rag_backend.add_memory(memory)
+                if storage is not None:
+                    storage.save(memory)
+                elif rag_backend is not None:
+                    rag_backend.add_memory(memory)
+                else:
+                    raise ValueError("Either storage or rag_backend must be provided")
                 memories_created += 1
                 commits_indexed += 1
                 # Record indexed commit
@@ -988,26 +1013,28 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
     def index_directory(
         self,
         root_dir: Path,
-        rag_backend: RAGBackend,
+        rag_backend: RAGBackend | None = None,
         max_depth: int = 5,
         on_progress: Callable[[int, int, str], None] | None = None,
         on_repo_start: Callable[[str, str | None], None] | None = None,
         on_repo_complete: Callable[[str, dict], None] | None = None,
         incremental: bool = True,
         project_override: str | None = None,
+        storage: StorageRouter | None = None,
     ) -> dict:
         """
         Recursively scan a directory for git repos and index each.
 
         Args:
             root_dir: Root directory to scan
-            rag_backend: RAG backend for vector storage
+            rag_backend: DEPRECATED - use storage instead
             max_depth: Maximum depth to search for repos
             on_progress: Progress callback for file indexing (current, total, file)
             on_repo_start: Callback when starting a repo (repo_name, project)
             on_repo_complete: Callback when repo completes (repo_name, stats)
             incremental: Only index new/changed files
             project_override: Override detected project name for all repos
+            storage: StorageRouter for unified SQLite + ChromaDB storage
 
         Returns:
             Summary statistics for all repos indexed
@@ -1057,7 +1084,12 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
             try:
                 # Clear existing memories for this namespace when doing full re-index
                 if not incremental:
-                    deleted = rag_backend.delete_by_namespace(namespace_id)
+                    if storage is not None:
+                        deleted = storage.delete_by_namespace(namespace_id)
+                    elif rag_backend is not None:
+                        deleted = rag_backend.delete_by_namespace(namespace_id)
+                    else:
+                        deleted = 0
                     if deleted > 0:
                         logger.info(f"Cleared {deleted} existing memories for {repo_name}")
                     self.clear_index(namespace_id)
@@ -1071,6 +1103,7 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
                     incremental=incremental,
                     project=project,
                     source_repo=repo_name,
+                    storage=storage,
                 )
 
                 # Create a summary memory with project and auto-detected tags
@@ -1090,7 +1123,10 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
                             "remote_url": repo_info.get("remote_url"),
                         },
                     )
-                    rag_backend.add_memory(summary_memory)
+                    if storage is not None:
+                        storage.save(summary_memory)
+                    elif rag_backend is not None:
+                        rag_backend.add_memory(summary_memory)
 
                 repo_result = {
                     "name": repo_name,

@@ -344,6 +344,38 @@ class RAGBackend:
         self._collection = None
         self._embedding_model = None
 
+    def reset_database(self) -> bool:
+        """
+        Reset the ChromaDB database by deleting and recreating it.
+
+        Use this when the database becomes corrupted (e.g., after version upgrades).
+
+        Returns:
+            True if reset successful, False otherwise
+        """
+        import shutil
+
+        try:
+            # Close any open connections
+            self.close()
+
+            # Delete the ChromaDB directory
+            if self._chroma_dir.exists():
+                shutil.rmtree(self._chroma_dir)
+
+            # Recreate the directory
+            self._chroma_dir.mkdir(parents=True, exist_ok=True)
+
+            # Re-initialize
+            self._ensure_initialized()
+
+            return True
+        except Exception as e:
+            import logging
+
+            logging.getLogger(__name__).error(f"Failed to reset ChromaDB: {e}")
+            return False
+
 
 class DocumentProcessor:
     """
