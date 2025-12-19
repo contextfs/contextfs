@@ -1338,6 +1338,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             except (LookupError, AttributeError):
                 pass
 
+            # Pre-initialize the embedder on main thread to avoid tokio runtime issues
+            # The tokio runtime in tokenizers crashes when initialized from a thread pool
+            try:
+                ctx.rag._ensure_initialized()
+            except Exception:
+                pass  # Best effort - will retry in thread
+
             async def run_indexing():
                 """Run indexing in background."""
                 import os

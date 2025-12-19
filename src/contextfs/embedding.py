@@ -112,8 +112,15 @@ class FastEmbedder(BaseEmbedder):
             # Determine parallel workers
             parallel = self._parallel
             if parallel is None:
-                # Auto: use half of CPU cores
-                parallel = max(1, (os.cpu_count() or 4) // 2)
+                # Check if tokenizers parallelism is disabled (indicates threaded context)
+                # In this case, disable parallel workers to avoid tokio runtime crashes
+                if os.environ.get("TOKENIZERS_PARALLELISM", "").lower() == "false":
+                    # Single-threaded to avoid tokio runtime conflicts
+                    parallel = 1
+                    logger.debug("FastEmbed parallel disabled (TOKENIZERS_PARALLELISM=false)")
+                else:
+                    # Auto: use half of CPU cores
+                    parallel = max(1, (os.cpu_count() or 4) // 2)
 
             self._model = TextEmbedding(
                 model_name=fastembed_model,
@@ -159,9 +166,17 @@ class FastEmbedder(BaseEmbedder):
         if not texts:
             return []
 
-        # FastEmbed returns a generator, convert to list
-        embeddings = list(self._model.embed(texts, parallel=self._parallel))
-        return [emb.tolist() for emb in embeddings]
+        # Process in smaller batches to avoid tokenizer crashes on large inputs
+        # This keeps parallelism within each batch while preventing memory/threading issues
+        batch_size = 32  # Safe batch size for tokenizer stability
+        all_embeddings = []
+
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            embeddings = list(self._model.embed(batch, parallel=self._parallel))
+            all_embeddings.extend([emb.tolist() for emb in embeddings])
+
+        return all_embeddings
 
     def encode_single(self, text: str) -> list[float]:
         """Encode a single text."""
@@ -245,12 +260,20 @@ class SentenceTransformersEmbedder(BaseEmbedder):
         if not texts:
             return []
 
-        embeddings = self._model.encode(
-            texts,
-            convert_to_numpy=True,
-            show_progress_bar=show_progress,
-        )
-        return embeddings.tolist()
+        # Process in smaller batches to avoid tokenizer crashes on large inputs
+        batch_size = 32  # Safe batch size for tokenizer stability
+        all_embeddings = []
+
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            embeddings = self._model.encode(
+                batch,
+                convert_to_numpy=True,
+                show_progress_bar=show_progress,
+            )
+            all_embeddings.extend(embeddings.tolist())
+
+        return all_embeddings
 
     def encode_single(self, text: str) -> list[float]:
         """Encode a single text."""
