@@ -1057,6 +1057,105 @@ def reindex_all(
         console.print(f"  Total memories: {result['total_memories']}")
 
 
+@app.command("install-hooks")
+def install_hooks(
+    repo_path: str = typer.Argument(None, help="Repository path (default: current directory)"),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing hooks"),
+):
+    """Install git hooks for automatic indexing.
+
+    Installs post-commit and post-merge hooks that automatically
+    run incremental indexing after commits and pulls.
+
+    Examples:
+        contextfs install-hooks              # Install to current repo
+        contextfs install-hooks /path/to/repo
+        contextfs install-hooks --force      # Overwrite existing hooks
+    """
+    import shutil
+
+    # Determine target repo
+    target = Path(repo_path).resolve() if repo_path else Path.cwd()
+
+    # Verify it's a git repo
+    git_dir = target / ".git"
+    if not git_dir.exists():
+        console.print(f"[red]Error: {target} is not a git repository[/red]")
+        raise typer.Exit(1)
+
+    hooks_dir = git_dir / "hooks"
+    hooks_dir.mkdir(exist_ok=True)
+
+    # Find source hooks (bundled with package)
+    import contextfs
+
+    pkg_dir = Path(contextfs.__file__).parent.parent.parent
+    source_hooks_dir = pkg_dir / "hooks"
+
+    # If not found in package, create hooks inline
+    hooks = {
+        "post-commit": """#!/bin/bash
+# ContextFS Post-Commit Hook - Auto-index on commit
+set -e
+if command -v contextfs &> /dev/null; then
+    CONTEXTFS="contextfs"
+elif [ -f "$HOME/.local/bin/contextfs" ]; then
+    CONTEXTFS="$HOME/.local/bin/contextfs"
+else
+    exit 0
+fi
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+(cd "$REPO_ROOT" && $CONTEXTFS index --incremental --mode files_only --quiet 2>/dev/null &) &
+exit 0
+""",
+        "post-merge": """#!/bin/bash
+# ContextFS Post-Merge Hook - Auto-index on pull/merge
+set -e
+if command -v contextfs &> /dev/null; then
+    CONTEXTFS="contextfs"
+elif [ -f "$HOME/.local/bin/contextfs" ]; then
+    CONTEXTFS="$HOME/.local/bin/contextfs"
+else
+    exit 0
+fi
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+(cd "$REPO_ROOT" && $CONTEXTFS index --incremental --quiet 2>/dev/null &) &
+exit 0
+""",
+    }
+
+    console.print(f"Installing ContextFS git hooks to: [cyan]{target}[/cyan]\n")
+
+    for hook_name, hook_content in hooks.items():
+        hook_path = hooks_dir / hook_name
+        source_path = source_hooks_dir / hook_name if source_hooks_dir.exists() else None
+
+        # Check if hook exists
+        if hook_path.exists() and not force:
+            console.print(f"  [yellow]{hook_name}:[/yellow] exists (use --force to overwrite)")
+            continue
+
+        # Backup existing hook
+        if hook_path.exists():
+            backup_path = hooks_dir / f"{hook_name}.bak"
+            shutil.copy(hook_path, backup_path)
+            console.print(f"  [dim]{hook_name}: backed up to {hook_name}.bak[/dim]")
+
+        # Write hook (prefer source file if available)
+        if source_path and source_path.exists():
+            shutil.copy(source_path, hook_path)
+        else:
+            hook_path.write_text(hook_content)
+
+        # Make executable
+        hook_path.chmod(0o755)
+        console.print(f"  [green]{hook_name}:[/green] installed")
+
+    console.print("\n[green]Done![/green] ContextFS will auto-index on:")
+    console.print("  - git commit (indexes changed files)")
+    console.print("  - git pull/merge (indexes new files and commits)")
+
+
 @app.command("cleanup-indexes")
 def cleanup_indexes(
     dry_run: bool = typer.Option(
