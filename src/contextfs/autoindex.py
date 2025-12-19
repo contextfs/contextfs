@@ -6,11 +6,13 @@ creating a searchable knowledge base of the codebase.
 """
 
 import logging
+import os
 import sqlite3
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import TypedDict
 
@@ -20,6 +22,15 @@ from contextfs.filetypes.registry import FileTypeRegistry
 from contextfs.rag import RAGBackend
 from contextfs.schemas import Memory, MemoryType
 from contextfs.storage_router import StorageRouter
+
+
+class IndexMode(Enum):
+    """Indexing modes for selective indexing."""
+
+    ALL = "all"  # Index both files and commits
+    FILES_ONLY = "files_only"  # Only index files
+    COMMITS_ONLY = "commits_only"  # Only index git commits
+
 
 logger = logging.getLogger(__name__)
 
@@ -497,6 +508,8 @@ class AutoIndexer:
         project: str | None = None,
         source_repo: str | None = None,
         storage: StorageRouter | None = None,
+        mode: IndexMode = IndexMode.ALL,
+        parallel_workers: int | None = None,
     ) -> dict:
         """
         Index all files in repository to both SQLite and ChromaDB.
@@ -510,6 +523,8 @@ class AutoIndexer:
             project: Project name for grouping memories across repos
             source_repo: Repository name (default: repo_path.name)
             storage: StorageRouter for unified SQLite + ChromaDB storage
+            mode: IndexMode.ALL, FILES_ONLY, or COMMITS_ONLY
+            parallel_workers: Number of parallel workers (None = auto)
 
         Returns:
             Indexing statistics
@@ -522,139 +537,146 @@ class AutoIndexer:
         # Default source_repo to directory name
         if source_repo is None:
             source_repo = repo_path.name
-        logger.info(f"Starting indexing for {repo_path} (namespace: {namespace_id})")
-
-        # Discover files
-        files = self.discover_files(repo_path)
-        total_files = len(files)
-
-        if total_files == 0:
-            logger.info("No indexable files found")
-            return {
-                "files_discovered": 0,
-                "files_indexed": 0,
-                "memories_created": 0,
-                "skipped": 0,
-            }
-
-        # Get already indexed files for incremental mode
-        indexed_hashes = {}
-        if incremental:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT file_path, file_hash FROM indexed_files WHERE namespace_id = ?",
-                (namespace_id,),
-            )
-            indexed_hashes = {row[0]: row[1] for row in cursor.fetchall()}
-            conn.close()
+        logger.info(
+            f"Starting indexing for {repo_path} (namespace: {namespace_id}, mode: {mode.value})"
+        )
 
         files_indexed = 0
         memories_created = 0
         skipped = 0
         errors = []
+        total_files = 0
+        commits_indexed = 0
 
-        for idx, file_path in enumerate(files):
-            rel_path = str(file_path.relative_to(repo_path))
+        # Index files (unless COMMITS_ONLY mode)
+        if mode != IndexMode.COMMITS_ONLY:
+            # Discover files
+            files = self.discover_files(repo_path)
+            total_files = len(files)
 
-            # Progress callback - show file being processed
-            if on_progress:
-                on_progress(idx + 1, total_files, rel_path)
-
-            # Check if file changed (incremental mode)
-            if incremental:
-                current_hash = self._file_hash(file_path)
-                if rel_path in indexed_hashes and indexed_hashes[rel_path] == current_hash:
-                    skipped += 1
-                    continue
-
-            try:
-                # Process file
-                chunks = self.processor.process_file(file_path)
-
-                if not chunks:
-                    skipped += 1
-                    continue
-
-                # Create memories from chunks (batch for speed)
-                file_memory_list = []
-                for chunk in chunks:
-                    memory = Memory(
-                        content=chunk["content"],
-                        type=MemoryType.CODE,
-                        tags=self._extract_tags(chunk, rel_path),
-                        summary=chunk["metadata"].get("summary") or f"Code from {rel_path}",
-                        namespace_id=namespace_id,
-                        source_file=rel_path,
-                        source_repo=source_repo,
-                        project=project,
-                        metadata={
-                            "chunk_index": chunk["metadata"].get("chunk_index"),
-                            "total_chunks": chunk["metadata"].get("total_chunks"),
-                            "file_type": chunk["metadata"].get("file_type"),
-                            "language": chunk["metadata"].get("language"),
-                            "auto_indexed": True,
-                        },
+            if total_files == 0:
+                logger.info("No indexable files found")
+            else:
+                # Get already indexed files for incremental mode
+                indexed_hashes = {}
+                if incremental:
+                    conn = sqlite3.connect(self.db_path)
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT file_path, file_hash FROM indexed_files WHERE namespace_id = ?",
+                        (namespace_id,),
                     )
-                    file_memory_list.append(memory)
+                    indexed_hashes = {row[0]: row[1] for row in cursor.fetchall()}
+                    conn.close()
 
-                # Batch add all memories for this file (much faster)
-                try:
-                    if storage is not None:
-                        # Use unified storage (saves to both SQLite and ChromaDB)
-                        added = storage.save_batch(file_memory_list)
-                        memories_created += added
-                        file_memories = added
-                    elif hasattr(rag_backend, "add_memories_batch"):
-                        # DEPRECATED: ChromaDB-only path (for backwards compatibility)
-                        added = rag_backend.add_memories_batch(file_memory_list)
-                        memories_created += added
-                        file_memories = added
-                    else:
-                        # Fallback to individual adds
-                        file_memories = 0
-                        for memory in file_memory_list:
-                            try:
-                                if storage is not None:
-                                    storage.save(memory)
-                                else:
-                                    rag_backend.add_memory(memory)
-                                file_memories += 1
-                                memories_created += 1
-                            except Exception as e:
-                                logger.warning(f"Failed to save memory for {rel_path}: {e}")
-                except Exception as e:
-                    logger.warning(f"Failed to batch save memories for {rel_path}: {e}")
-                    file_memories = 0
+                # Determine number of workers
+                if parallel_workers is None:
+                    # Auto: use half of CPU cores for I/O bound work
+                    parallel_workers = max(1, (os.cpu_count() or 4) // 2)
 
-                # Track indexed file
-                if file_memories > 0:
-                    self._record_indexed_file(
-                        namespace_id,
-                        rel_path,
-                        self._file_hash(file_path),
-                        file_memories,
-                    )
-                    files_indexed += 1
+                # Process files (with optional parallelism for file reading)
+                for idx, file_path in enumerate(files):
+                    rel_path = str(file_path.relative_to(repo_path))
 
-            except Exception as e:
-                logger.warning(f"Failed to index {rel_path}: {e}")
-                errors.append({"file": rel_path, "error": str(e)})
+                    # Progress callback - show file being processed
+                    if on_progress:
+                        on_progress(idx + 1, total_files, rel_path)
 
-        # Index git history
-        git_stats = self.index_git_history(
-            repo_path=repo_path,
-            namespace_id=namespace_id,
-            rag_backend=rag_backend,
-            max_commits=100,
-            on_progress=on_progress,
-            incremental=incremental,
-            project=project,
-            source_repo=source_repo,
-            storage=storage,
-        )
-        memories_created += git_stats["memories_created"]
-        commits_indexed = git_stats["commits_indexed"]
+                    # Check if file changed (incremental mode)
+                    if incremental:
+                        current_hash = self._file_hash(file_path)
+                        if rel_path in indexed_hashes and indexed_hashes[rel_path] == current_hash:
+                            skipped += 1
+                            continue
+
+                    try:
+                        # Process file
+                        chunks = self.processor.process_file(file_path)
+
+                        if not chunks:
+                            skipped += 1
+                            continue
+
+                        # Create memories from chunks (batch for speed)
+                        file_memory_list = []
+                        for chunk in chunks:
+                            memory = Memory(
+                                content=chunk["content"],
+                                type=MemoryType.CODE,
+                                tags=self._extract_tags(chunk, rel_path),
+                                summary=chunk["metadata"].get("summary") or f"Code from {rel_path}",
+                                namespace_id=namespace_id,
+                                source_file=rel_path,
+                                source_repo=source_repo,
+                                project=project,
+                                metadata={
+                                    "chunk_index": chunk["metadata"].get("chunk_index"),
+                                    "total_chunks": chunk["metadata"].get("total_chunks"),
+                                    "file_type": chunk["metadata"].get("file_type"),
+                                    "language": chunk["metadata"].get("language"),
+                                    "auto_indexed": True,
+                                },
+                            )
+                            file_memory_list.append(memory)
+
+                        # Batch add all memories for this file (much faster)
+                        try:
+                            if storage is not None:
+                                # Use unified storage (saves to both SQLite and ChromaDB)
+                                added = storage.save_batch(file_memory_list)
+                                memories_created += added
+                                file_memories = added
+                            elif hasattr(rag_backend, "add_memories_batch"):
+                                # DEPRECATED: ChromaDB-only path (for backwards compatibility)
+                                added = rag_backend.add_memories_batch(file_memory_list)
+                                memories_created += added
+                                file_memories = added
+                            else:
+                                # Fallback to individual adds
+                                file_memories = 0
+                                for memory in file_memory_list:
+                                    try:
+                                        if storage is not None:
+                                            storage.save(memory)
+                                        else:
+                                            rag_backend.add_memory(memory)
+                                        file_memories += 1
+                                        memories_created += 1
+                                    except Exception as e:
+                                        logger.warning(f"Failed to save memory for {rel_path}: {e}")
+                        except Exception as e:
+                            logger.warning(f"Failed to batch save memories for {rel_path}: {e}")
+                            file_memories = 0
+
+                        # Track indexed file
+                        if file_memories > 0:
+                            self._record_indexed_file(
+                                namespace_id,
+                                rel_path,
+                                self._file_hash(file_path),
+                                file_memories,
+                            )
+                            files_indexed += 1
+
+                    except Exception as e:
+                        logger.warning(f"Failed to index {rel_path}: {e}")
+                        errors.append({"file": rel_path, "error": str(e)})
+
+        # Index git history (unless FILES_ONLY mode)
+        if mode != IndexMode.FILES_ONLY:
+            git_stats = self.index_git_history(
+                repo_path=repo_path,
+                namespace_id=namespace_id,
+                rag_backend=rag_backend,
+                max_commits=100,
+                on_progress=on_progress,
+                incremental=incremental,
+                project=project,
+                source_repo=source_repo,
+                storage=storage,
+            )
+            memories_created += git_stats["memories_created"]
+            commits_indexed = git_stats["commits_indexed"]
 
         # Update index status only if we indexed something new
         # Don't overwrite existing status with zeros from incremental skips
@@ -671,16 +693,17 @@ class AutoIndexer:
 
         logger.info(
             f"Indexing complete: {files_indexed} files, "
-            f"{git_stats['commits_indexed']} commits, {memories_created} memories"
+            f"{commits_indexed} commits, {memories_created} memories"
         )
 
         return {
             "files_discovered": total_files,
             "files_indexed": files_indexed,
-            "commits_indexed": git_stats["commits_indexed"],
+            "commits_indexed": commits_indexed,
             "memories_created": memories_created,
             "skipped": skipped,
             "errors": errors,
+            "mode": mode.value,
         }
 
     def _extract_tags(self, chunk: dict, rel_path: str) -> list[str]:

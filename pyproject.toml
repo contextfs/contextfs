@@ -67,8 +67,16 @@ postgres = [
     "asyncpg>=0.29.0",
     "psycopg2-binary>=2.9.9",
 ]
+# Fast embedding backend (recommended for large repos)
+fast = [
+    "fastembed>=0.3.0",
+]
+# GPU acceleration (optional)
+gpu = [
+    "fastembed-gpu>=0.3.0",
+]
 all = [
-    "contextfs[web,postgres]",
+    "contextfs[web,postgres,fast]",
 ]
 dev = [
     "pytest>=7.4.0",

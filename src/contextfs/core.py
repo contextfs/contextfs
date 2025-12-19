@@ -75,10 +75,13 @@ class ContextFS:
         self._db_path = self.data_dir / self.config.sqlite_filename
         self._init_db()
 
-        # Initialize RAG backend
+        # Initialize RAG backend with configurable embedding backend
         self.rag = RAGBackend(
             data_dir=self.data_dir,
             embedding_model=self.config.embedding_model,
+            embedding_backend=self.config.embedding_backend,
+            use_gpu=self.config.use_gpu,
+            parallel_workers=self.config.embedding_parallel_workers,
         )
 
         # Initialize graph backend if configured
@@ -342,6 +345,7 @@ class ContextFS:
         incremental: bool = True,
         project: str | None = None,
         source_repo: str | None = None,
+        mode: str = "all",
     ) -> dict:
         """
         Manually index a repository to ChromaDB.
@@ -352,10 +356,13 @@ class ContextFS:
             incremental: Only index new/changed files
             project: Project name for grouping memories across repos
             source_repo: Repository name (default: repo directory name)
+            mode: "all", "files_only", or "commits_only"
 
         Returns:
             Indexing statistics
         """
+        from contextfs.autoindex import IndexMode
+
         path = repo_path or self._repo_path
         if not path:
             raise ValueError("No repository path available")
@@ -367,6 +374,9 @@ class ContextFS:
         if source_repo is None:
             source_repo = Path(path).name
 
+        # Convert string mode to IndexMode enum
+        index_mode = IndexMode(mode) if isinstance(mode, str) else mode
+
         indexer = self._get_auto_indexer()
         return indexer.index_repository(
             repo_path=path,
@@ -376,6 +386,7 @@ class ContextFS:
             incremental=incremental,
             project=project,
             source_repo=source_repo,
+            mode=index_mode,
         )
 
     def get_index_status(self, repo_path: Path | None = None):

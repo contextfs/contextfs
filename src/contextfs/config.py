@@ -63,6 +63,16 @@ class Config(BaseSettings):
     chroma_port: int = 8000
 
     # =================================================================
+    # Embedding Backend Configuration
+    # =================================================================
+    # Backend: "auto" (try fastembed first), "fastembed", or "sentence_transformers"
+    embedding_backend: str = "auto"
+    # GPU acceleration: None = auto-detect, True = force GPU, False = force CPU
+    use_gpu: bool | None = None
+    # Parallel workers for embedding (None = auto, 0 = all cores)
+    embedding_parallel_workers: int | None = None
+
+    # =================================================================
     # FalkorDB Configuration
     # =================================================================
     falkordb_enabled: bool = False

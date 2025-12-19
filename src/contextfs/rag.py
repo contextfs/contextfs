@@ -1,11 +1,12 @@
 """
 RAG Backend for ContextFS.
 
-Provides semantic search using ChromaDB and sentence-transformers.
-Integrated from local_rag_pipeline.
+Provides semantic search using ChromaDB and configurable embedding backends.
+Supports FastEmbed (ONNX) or sentence-transformers with optional GPU acceleration.
 """
 
 import json
+import os
 from pathlib import Path
 
 from contextfs.schemas import Memory, MemoryType, SearchResult
@@ -13,12 +14,13 @@ from contextfs.schemas import Memory, MemoryType, SearchResult
 
 class RAGBackend:
     """
-    RAG backend using ChromaDB and sentence-transformers.
+    RAG backend using ChromaDB and configurable embedding backends.
 
     Provides:
-    - Semantic embedding generation
+    - Semantic embedding generation (FastEmbed or SentenceTransformers)
     - Vector similarity search
     - Hybrid search (semantic + keyword)
+    - Optional GPU acceleration
     """
 
     def __init__(
@@ -26,18 +28,27 @@ class RAGBackend:
         data_dir: Path,
         embedding_model: str = "all-MiniLM-L6-v2",
         collection_name: str = "contextfs_memories",
+        embedding_backend: str = "auto",
+        use_gpu: bool | None = None,
+        parallel_workers: int | None = None,
     ):
         """
         Initialize RAG backend.
 
         Args:
             data_dir: Directory for ChromaDB storage
-            embedding_model: Sentence transformer model name
+            embedding_model: Embedding model name
             collection_name: ChromaDB collection name
+            embedding_backend: "fastembed", "sentence_transformers", or "auto"
+            use_gpu: Enable GPU acceleration (None = auto-detect)
+            parallel_workers: Number of parallel workers for embedding (None = auto)
         """
         self.data_dir = data_dir
         self.embedding_model_name = embedding_model
         self.collection_name = collection_name
+        self._embedding_backend = embedding_backend
+        self._use_gpu = use_gpu
+        self._parallel_workers = parallel_workers
 
         self._chroma_dir = data_dir / "chroma_db"
         self._chroma_dir.mkdir(parents=True, exist_ok=True)
@@ -45,7 +56,7 @@ class RAGBackend:
         # Lazy initialization
         self._client = None
         self._collection = None
-        self._embedding_model = None
+        self._embedder = None
 
     def _ensure_initialized(self) -> None:
         """Lazy initialize ChromaDB and embedding model."""
@@ -69,29 +80,31 @@ class RAGBackend:
         except ImportError:
             raise ImportError("ChromaDB not installed. Install with: pip install chromadb")
 
-        try:
-            from sentence_transformers import SentenceTransformer
+        # Initialize embedding backend
+        from contextfs.embedding import create_embedder
 
-            self._embedding_model = SentenceTransformer(self.embedding_model_name)
+        # Auto-detect GPU if not specified
+        use_gpu = self._use_gpu
+        if use_gpu is None:
+            # Check environment variable
+            use_gpu = os.environ.get("CONTEXTFS_USE_GPU", "").lower() in ("1", "true", "yes")
 
-        except ImportError:
-            raise ImportError(
-                "sentence-transformers not installed. Install with: pip install sentence-transformers"
-            )
+        self._embedder = create_embedder(
+            model_name=self.embedding_model_name,
+            backend=self._embedding_backend,
+            use_gpu=use_gpu,
+            parallel=self._parallel_workers,
+        )
 
     def _get_embedding(self, text: str) -> list[float]:
         """Generate embedding for text."""
         self._ensure_initialized()
-        embedding = self._embedding_model.encode(text, convert_to_numpy=True)
-        return embedding.tolist()
+        return self._embedder.encode_single(text)
 
     def _get_embeddings_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts in batch (much faster)."""
         self._ensure_initialized()
-        embeddings = self._embedding_model.encode(
-            texts, convert_to_numpy=True, show_progress_bar=False
-        )
-        return embeddings.tolist()
+        return self._embedder.encode(texts)
 
     def add_memory(self, memory: Memory) -> None:
         """

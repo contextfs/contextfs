@@ -558,6 +558,12 @@ async def list_tools() -> list[Tool]:
                         "description": "Force re-index even if already indexed",
                         "default": False,
                     },
+                    "mode": {
+                        "type": "string",
+                        "description": "Index mode: 'all' (files+commits), 'files_only', or 'commits_only'",
+                        "enum": ["all", "files_only", "commits_only"],
+                        "default": "all",
+                    },
                 },
             },
         ),
@@ -1264,6 +1270,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
             incremental = arguments.get("incremental", True)
             force = arguments.get("force", False)
+            mode = arguments.get("mode", "all")
 
             # Get current working directory
             cwd = Path.cwd()
@@ -1294,20 +1301,20 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     # Task is dead but state wasn't cleaned up - reset it
                     _indexing_state = IndexingState()
 
-            # Check if already indexed (unless force)
+            # Check if already indexed (unless force or commits_only mode)
             status = ctx.get_index_status(repo_path=cwd)
-            if status and status.indexed and not force:
+            if status and status.indexed and not force and mode != "commits_only":
                 return [
                     TextContent(
                         type="text",
                         text=f"Repository '{repo_name}' already indexed.\n"
-                        f"Files: {status.files_indexed}\n"
-                        f"Use force=true to re-index.",
+                        f"Files: {status.files_indexed}, Commits: {status.commits_indexed}\n"
+                        f"Use force=true to re-index, or mode='commits_only' to just index commits.",
                     )
                 ]
 
-            # Clear index if forcing
-            if force:
+            # Clear index if forcing (but not for commits_only mode which is additive)
+            if force and mode != "commits_only":
                 ctx.clear_index(repo_path=cwd)
 
             # Reset indexing state
@@ -1357,6 +1364,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         repo_path=cwd,
                         incremental=incremental,
                         on_progress=on_progress,
+                        mode=mode,
                     )
                     _indexing_state.result = result
                     _indexing_state.running = False
@@ -1367,10 +1375,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             # Start background task
             _indexing_state.task = asyncio.create_task(run_indexing())
 
+            mode_desc = {
+                "all": "files and commits",
+                "files_only": "files only",
+                "commits_only": "commits only",
+            }
             return [
                 TextContent(
                     type="text",
-                    text=f"Started indexing '{repo_name}' in background.\n"
+                    text=f"Started indexing '{repo_name}' in background ({mode_desc.get(mode, mode)}).\n"
                     f"Use contextfs_index_status to check progress.",
                 )
             ]

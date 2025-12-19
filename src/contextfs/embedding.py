@@ -1,0 +1,364 @@
+"""
+Embedding backend for ContextFS.
+
+Supports multiple embedding backends:
+- FastEmbed (ONNX-based, faster, recommended)
+- SentenceTransformers (PyTorch-based, fallback)
+
+With optional GPU acceleration on Mac (MPS), Linux (CUDA), and Windows (CUDA).
+"""
+
+import logging
+import os
+from abc import ABC, abstractmethod
+from enum import Enum
+
+logger = logging.getLogger(__name__)
+
+
+class EmbeddingBackend(Enum):
+    """Available embedding backends."""
+
+    FASTEMBED = "fastembed"
+    SENTENCE_TRANSFORMERS = "sentence_transformers"
+    AUTO = "auto"  # Auto-detect best available
+
+
+class DeviceType(Enum):
+    """Device types for computation."""
+
+    CPU = "cpu"
+    CUDA = "cuda"  # NVIDIA GPU
+    MPS = "mps"  # Apple Silicon
+    AUTO = "auto"  # Auto-detect best available
+
+
+class BaseEmbedder(ABC):
+    """Abstract base class for embedding backends."""
+
+    @abstractmethod
+    def encode(self, texts: list[str], show_progress: bool = False) -> list[list[float]]:
+        """Encode texts to embeddings."""
+        pass
+
+    @abstractmethod
+    def encode_single(self, text: str) -> list[float]:
+        """Encode a single text to embedding."""
+        pass
+
+    @property
+    @abstractmethod
+    def model_name(self) -> str:
+        """Get model name."""
+        pass
+
+    @property
+    @abstractmethod
+    def dimension(self) -> int:
+        """Get embedding dimension."""
+        pass
+
+
+class FastEmbedder(BaseEmbedder):
+    """FastEmbed backend using ONNX runtime."""
+
+    def __init__(
+        self,
+        model_name: str = "all-MiniLM-L6-v2",
+        use_gpu: bool = False,
+        parallel: int | None = None,
+    ):
+        """
+        Initialize FastEmbed backend.
+
+        Args:
+            model_name: Model name (will be mapped to FastEmbed model)
+            use_gpu: Enable GPU acceleration
+            parallel: Number of parallel workers (None = auto, 0 = all cores)
+        """
+        self._model_name = model_name
+        self._use_gpu = use_gpu
+        self._parallel = parallel
+        self._model = None
+        self._dimension = None
+
+    def _ensure_initialized(self) -> None:
+        """Lazy initialize the model."""
+        if self._model is not None:
+            return
+
+        try:
+            from fastembed import TextEmbedding
+
+            # Map common model names to FastEmbed models
+            model_map = {
+                "all-MiniLM-L6-v2": "sentence-transformers/all-MiniLM-L6-v2",
+                "all-mpnet-base-v2": "sentence-transformers/all-mpnet-base-v2",
+                "paraphrase-MiniLM-L6-v2": "sentence-transformers/paraphrase-MiniLM-L6-v2",
+            }
+            fastembed_model = model_map.get(self._model_name, self._model_name)
+
+            # Configure providers for GPU
+            providers = None
+            if self._use_gpu:
+                providers = self._get_gpu_providers()
+                if providers:
+                    logger.info(f"FastEmbed using GPU providers: {providers}")
+
+            # Determine parallel workers
+            parallel = self._parallel
+            if parallel is None:
+                # Auto: use half of CPU cores
+                parallel = max(1, (os.cpu_count() or 4) // 2)
+
+            self._model = TextEmbedding(
+                model_name=fastembed_model,
+                providers=providers,
+            )
+            self._parallel = parallel
+
+            # Get dimension from a test embedding
+            test_emb = list(self._model.embed(["test"]))[0]
+            self._dimension = len(test_emb)
+
+            logger.info(
+                f"FastEmbed initialized: {fastembed_model} (dim={self._dimension}, parallel={parallel})"
+            )
+
+        except ImportError:
+            raise ImportError(
+                "FastEmbed not installed. Install with: pip install fastembed"
+                "\nFor GPU support: pip install fastembed-gpu"
+            )
+
+    def _get_gpu_providers(self) -> list[str] | None:
+        """Get ONNX execution providers for GPU acceleration."""
+        import platform
+
+        system = platform.system()
+
+        if system == "Darwin":
+            # macOS - try CoreML first, then CPU
+            # Note: MPS is not directly supported by ONNX Runtime
+            # CoreMLExecutionProvider works on Apple Silicon
+            return ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+        elif system == "Linux" or system == "Windows":
+            # Try CUDA first, then CPU
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        else:
+            return None
+
+    def encode(self, texts: list[str], show_progress: bool = False) -> list[list[float]]:
+        """Encode texts to embeddings in batch."""
+        self._ensure_initialized()
+
+        if not texts:
+            return []
+
+        # FastEmbed returns a generator, convert to list
+        embeddings = list(self._model.embed(texts, parallel=self._parallel))
+        return [emb.tolist() for emb in embeddings]
+
+    def encode_single(self, text: str) -> list[float]:
+        """Encode a single text."""
+        result = self.encode([text])
+        return result[0] if result else []
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    @property
+    def dimension(self) -> int:
+        self._ensure_initialized()
+        return self._dimension or 384
+
+
+class SentenceTransformersEmbedder(BaseEmbedder):
+    """SentenceTransformers backend using PyTorch."""
+
+    def __init__(
+        self,
+        model_name: str = "all-MiniLM-L6-v2",
+        use_gpu: bool = False,
+    ):
+        """
+        Initialize SentenceTransformers backend.
+
+        Args:
+            model_name: Model name
+            use_gpu: Enable GPU acceleration
+        """
+        self._model_name = model_name
+        self._use_gpu = use_gpu
+        self._model = None
+        self._dimension = None
+
+    def _ensure_initialized(self) -> None:
+        """Lazy initialize the model."""
+        if self._model is not None:
+            return
+
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            device = self._get_device() if self._use_gpu else "cpu"
+
+            self._model = SentenceTransformer(self._model_name, device=device)
+            self._dimension = self._model.get_sentence_embedding_dimension()
+
+            logger.info(
+                f"SentenceTransformers initialized: {self._model_name} (dim={self._dimension}, device={device})"
+            )
+
+        except ImportError:
+            raise ImportError(
+                "sentence-transformers not installed. Install with: pip install sentence-transformers"
+            )
+
+    def _get_device(self) -> str:
+        """Get best available device for PyTorch."""
+        import platform
+
+        try:
+            import torch
+
+            system = platform.system()
+
+            if system == "Darwin" and torch.backends.mps.is_available():
+                return "mps"
+            elif torch.cuda.is_available():
+                return "cuda"
+            else:
+                return "cpu"
+        except ImportError:
+            return "cpu"
+
+    def encode(self, texts: list[str], show_progress: bool = False) -> list[list[float]]:
+        """Encode texts to embeddings in batch."""
+        self._ensure_initialized()
+
+        if not texts:
+            return []
+
+        embeddings = self._model.encode(
+            texts,
+            convert_to_numpy=True,
+            show_progress_bar=show_progress,
+        )
+        return embeddings.tolist()
+
+    def encode_single(self, text: str) -> list[float]:
+        """Encode a single text."""
+        self._ensure_initialized()
+        embedding = self._model.encode(text, convert_to_numpy=True)
+        return embedding.tolist()
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    @property
+    def dimension(self) -> int:
+        self._ensure_initialized()
+        return self._dimension or 384
+
+
+def create_embedder(
+    model_name: str = "all-MiniLM-L6-v2",
+    backend: EmbeddingBackend | str = EmbeddingBackend.AUTO,
+    use_gpu: bool = False,
+    parallel: int | None = None,
+) -> BaseEmbedder:
+    """
+    Create an embedder with the specified backend.
+
+    Args:
+        model_name: Embedding model name
+        backend: Backend to use (fastembed, sentence_transformers, or auto)
+        use_gpu: Enable GPU acceleration
+        parallel: Number of parallel workers (FastEmbed only)
+
+    Returns:
+        Configured embedder instance
+    """
+    if isinstance(backend, str):
+        backend = EmbeddingBackend(backend)
+
+    if backend == EmbeddingBackend.AUTO:
+        # Try FastEmbed first (faster), fall back to SentenceTransformers
+        try:
+            import fastembed  # noqa: F401
+
+            backend = EmbeddingBackend.FASTEMBED
+            logger.info("Auto-selected FastEmbed backend")
+        except ImportError:
+            backend = EmbeddingBackend.SENTENCE_TRANSFORMERS
+            logger.info("Auto-selected SentenceTransformers backend (FastEmbed not available)")
+
+    if backend == EmbeddingBackend.FASTEMBED:
+        return FastEmbedder(
+            model_name=model_name,
+            use_gpu=use_gpu,
+            parallel=parallel,
+        )
+    else:
+        return SentenceTransformersEmbedder(
+            model_name=model_name,
+            use_gpu=use_gpu,
+        )
+
+
+def check_gpu_available() -> dict:
+    """
+    Check GPU availability for embedding acceleration.
+
+    Returns:
+        Dict with GPU status information
+    """
+    import platform
+
+    result = {
+        "system": platform.system(),
+        "gpu_available": False,
+        "gpu_type": None,
+        "recommended_backend": "fastembed",
+    }
+
+    system = platform.system()
+
+    # Check CUDA
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            result["gpu_available"] = True
+            result["gpu_type"] = "cuda"
+            result["cuda_device"] = torch.cuda.get_device_name(0)
+            return result
+    except ImportError:
+        pass
+
+    # Check MPS (Apple Silicon)
+    if system == "Darwin":
+        try:
+            import torch
+
+            if torch.backends.mps.is_available():
+                result["gpu_available"] = True
+                result["gpu_type"] = "mps"
+                return result
+        except (ImportError, AttributeError):
+            pass
+
+        # Check for CoreML (works with FastEmbed on Apple Silicon)
+        try:
+            import coremltools  # noqa: F401
+
+            result["gpu_available"] = True
+            result["gpu_type"] = "coreml"
+            return result
+        except ImportError:
+            pass
+
+    return result
