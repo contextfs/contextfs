@@ -491,8 +491,17 @@ def index(
     reset_chroma: bool = typer.Option(
         False, "--reset-chroma", help="Reset ChromaDB before indexing (use if corrupted)"
     ),
+    allow_dir: bool = typer.Option(
+        False,
+        "--allow-dir",
+        help="Allow indexing non-git directories (use index-dir for multiple repos)",
+    ),
 ):
-    """Index a repository's codebase for semantic search."""
+    """Index a repository's codebase for semantic search.
+
+    By default, only indexes git repositories. Use --allow-dir to index
+    non-git directories, or use 'index-dir' command to scan for multiple repos.
+    """
     import subprocess
     import sys
 
@@ -511,6 +520,8 @@ def index(
             cmd.append("--full")
         if mode != "all":
             cmd.extend(["--mode", mode])
+        if allow_dir:
+            cmd.append("--allow-dir")
         if repo_path:
             cmd.append(str(repo_path))
 
@@ -526,10 +537,17 @@ def index(
         return
 
     if not repo_path:
-        # Not in a git repo, use the provided path or cwd
+        # Not in a git repo
+        if not allow_dir:
+            console.print(f"[red]Error: Not a git repository: {start_path.resolve()}[/red]")
+            console.print("[yellow]Use --allow-dir to index non-git directories,[/yellow]")
+            console.print(
+                "[yellow]or use 'contextfs index-dir' to scan for multiple repos.[/yellow]"
+            )
+            raise typer.Exit(1)
         repo_path = start_path.resolve()
         if not quiet:
-            console.print(f"[yellow]Not a git repository, indexing: {repo_path}[/yellow]")
+            console.print(f"[yellow]Indexing non-git directory: {repo_path}[/yellow]")
     else:
         if not quiet:
             console.print(f"[cyan]Found git repository: {repo_path}[/cyan]")
@@ -1069,6 +1087,142 @@ def reindex_all(
         console.print(f"  Failed: {failed}")
         console.print(f"  Total files: {total_files}")
         console.print(f"  Total memories: {total_memories}")
+
+
+@app.command("cleanup-indexes")
+def cleanup_indexes(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be removed without removing"
+    ),
+    include_non_git: bool = typer.Option(
+        True, "--include-non-git/--git-only", help="Also remove non-git directories"
+    ),
+    confirm: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+):
+    """Remove stale indexes for repositories that no longer exist.
+
+    Cleans up indexes for:
+    - Repositories that have been deleted or moved
+    - Paths that no longer exist on disk
+    - Directories that are no longer git repositories (if --include-non-git)
+
+    Examples:
+        contextfs cleanup-indexes --dry-run     # Preview what would be removed
+        contextfs cleanup-indexes -y            # Remove without confirmation
+        contextfs cleanup-indexes --git-only    # Only keep git repositories
+    """
+    ctx = get_ctx()
+
+    result = ctx.cleanup_indexes(dry_run=True)
+
+    if not result["removed"]:
+        console.print("[green]No stale indexes found. All indexes are valid.[/green]")
+        return
+
+    # Show what would be removed
+    console.print(f"\n[bold]Found {len(result['removed'])} stale index(es):[/bold]\n")
+
+    table = Table()
+    table.add_column("Repository", style="cyan")
+    table.add_column("Path", style="dim")
+    table.add_column("Files", justify="right")
+    table.add_column("Commits", justify="right")
+    table.add_column("Reason", style="yellow")
+
+    reason_labels = {
+        "no_path": "No path stored",
+        "path_missing": "Path missing",
+        "not_git_repo": "Not a git repo",
+    }
+
+    for idx in result["removed"]:
+        repo_name = idx["repo_path"].split("/")[-1] if idx["repo_path"] else idx["namespace_id"]
+        reason = reason_labels.get(idx.get("reason", ""), idx.get("reason", "unknown"))
+        table.add_row(
+            repo_name,
+            idx["repo_path"] or "-",
+            str(idx["files_indexed"]),
+            str(idx["commits_indexed"]),
+            reason,
+        )
+
+    console.print(table)
+
+    if dry_run:
+        console.print("\n[yellow]Dry run - no indexes removed[/yellow]")
+        return
+
+    if not confirm:
+        console.print()
+        if not typer.confirm(f"Remove {len(result['removed'])} stale index(es)?"):
+            console.print("[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+
+    # Actually delete
+    result = ctx.cleanup_indexes(dry_run=False)
+
+    console.print(f"\n[green]✅ Removed {len(result['removed'])} stale index(es)[/green]")
+    console.print(f"[green]   Kept {len(result['kept'])} valid index(es)[/green]")
+
+
+@app.command("delete-index")
+def delete_index_cmd(
+    path: str = typer.Argument(None, help="Repository path to delete index for"),
+    namespace_id: str = typer.Option(None, "--id", help="Namespace ID to delete"),
+    confirm: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+):
+    """Delete a specific repository index.
+
+    Delete by path or namespace ID.
+
+    Examples:
+        contextfs delete-index /path/to/repo
+        contextfs delete-index --id repo-abc123
+    """
+    if not path and not namespace_id:
+        console.print("[red]Error: Provide either a path or --id[/red]")
+        raise typer.Exit(1)
+
+    ctx = get_ctx()
+
+    # Find the index to show details
+    indexes = ctx.list_indexes()
+    target_idx = None
+
+    for idx in indexes:
+        if (
+            namespace_id
+            and idx.namespace_id == namespace_id
+            or path
+            and idx.repo_path == str(Path(path).resolve())
+        ):
+            target_idx = idx
+            break
+
+    if not target_idx:
+        console.print(f"[red]Index not found for: {path or namespace_id}[/red]")
+        raise typer.Exit(1)
+
+    repo_name = (
+        target_idx.repo_path.split("/")[-1] if target_idx.repo_path else target_idx.namespace_id
+    )
+
+    if not confirm:
+        console.print(f"\nAbout to delete index for: [cyan]{repo_name}[/cyan]")
+        console.print(f"  Files: {target_idx.files_indexed}")
+        console.print(f"  Commits: {target_idx.commits_indexed}")
+        console.print(f"  Memories: {target_idx.memories_created}")
+        console.print()
+
+        if not typer.confirm("Delete this index?"):
+            console.print("[dim]Cancelled[/dim]")
+            raise typer.Exit(0)
+
+    if ctx.delete_index(namespace_id=namespace_id, repo_path=path):
+        console.print(f"[green]✅ Deleted index for {repo_name}[/green]")
+    else:
+        console.print("[red]Failed to delete index[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()

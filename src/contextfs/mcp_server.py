@@ -960,6 +960,40 @@ async def list_tools() -> list[Tool]:
                 "required": ["memory_id"],
             },
         ),
+        # =========================================================================
+        # Index Management Tools
+        # =========================================================================
+        Tool(
+            name="contextfs_cleanup_indexes",
+            description="Remove stale indexes for repositories that no longer exist on disk or are not git repos.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "If true, only report what would be deleted without deleting",
+                        "default": False,
+                    },
+                },
+            },
+        ),
+        Tool(
+            name="contextfs_delete_index",
+            description="Delete a specific repository index by path or namespace ID.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo_path": {
+                        "type": "string",
+                        "description": "Repository path to delete index for",
+                    },
+                    "namespace_id": {
+                        "type": "string",
+                        "description": "Namespace ID to delete",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -2007,6 +2041,79 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     output.append(f"    {content_preview}")
 
             return [TextContent(type="text", text="\n".join(output))]
+
+        # =====================================================================
+        # Index Management Tool Handlers
+        # =====================================================================
+        elif name == "contextfs_cleanup_indexes":
+            dry_run = arguments.get("dry_run", False)
+
+            result = ctx.cleanup_indexes(dry_run=dry_run)
+
+            if not result["removed"]:
+                return [
+                    TextContent(
+                        type="text",
+                        text="No stale indexes found. All indexes are valid.",
+                    )
+                ]
+
+            reason_labels = {
+                "no_path": "No path stored",
+                "path_missing": "Path missing",
+                "not_git_repo": "Not a git repo",
+            }
+
+            output = []
+            if dry_run:
+                output.append(f"Found {len(result['removed'])} stale index(es) (dry run):\n")
+            else:
+                output.append(f"Removed {len(result['removed'])} stale index(es):\n")
+
+            for idx in result["removed"]:
+                repo_name = (
+                    idx["repo_path"].split("/")[-1] if idx["repo_path"] else idx["namespace_id"]
+                )
+                reason = reason_labels.get(idx.get("reason", ""), idx.get("reason", "unknown"))
+                output.append(f"  • {repo_name}: {reason}")
+                output.append(f"    Path: {idx['repo_path'] or 'none'}")
+                output.append(
+                    f"    Files: {idx['files_indexed']}, Commits: {idx['commits_indexed']}"
+                )
+
+            output.append(f"\nKept {len(result['kept'])} valid index(es)")
+
+            return [TextContent(type="text", text="\n".join(output))]
+
+        elif name == "contextfs_delete_index":
+            repo_path = arguments.get("repo_path")
+            namespace_id = arguments.get("namespace_id")
+
+            if not repo_path and not namespace_id:
+                return [
+                    TextContent(
+                        type="text",
+                        text="Error: Provide either repo_path or namespace_id",
+                    )
+                ]
+
+            deleted = ctx.delete_index(namespace_id=namespace_id, repo_path=repo_path)
+
+            if deleted:
+                target = repo_path or namespace_id
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"Successfully deleted index for: {target}",
+                    )
+                ]
+            else:
+                return [
+                    TextContent(
+                        type="text",
+                        text=f"Index not found for: {repo_path or namespace_id}",
+                    )
+                ]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]

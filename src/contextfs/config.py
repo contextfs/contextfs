@@ -65,8 +65,8 @@ class Config(BaseSettings):
     # =================================================================
     # Embedding Backend Configuration
     # =================================================================
-    # Backend: "auto" (try fastembed first), "fastembed", or "sentence_transformers"
-    embedding_backend: str = "auto"
+    # Backend: "fastembed" (ONNX, faster), "sentence_transformers", or "auto"
+    embedding_backend: str = "fastembed"
     # GPU acceleration: None = auto-detect, True = force GPU, False = force CPU
     use_gpu: bool | None = None
     # Parallel workers for embedding (None = auto, 0 = all cores)
@@ -97,6 +97,11 @@ class Config(BaseSettings):
     # Chunking
     chunk_size: int = 1000
     chunk_overlap: int = 200
+
+    # =================================================================
+    # Indexing Settings
+    # =================================================================
+    max_commits: int = 100  # Maximum git commits to index (0 = unlimited)
 
     # =================================================================
     # Session Settings

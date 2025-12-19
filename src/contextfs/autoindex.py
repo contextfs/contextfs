@@ -37,26 +37,50 @@ logger = logging.getLogger(__name__)
 
 # Default directories and files to ignore
 DEFAULT_IGNORE_PATTERNS = {
-    # Package managers
+    # Package managers & dependencies (all languages)
     "node_modules",
     "vendor",
     "packages",
     ".pnpm",
     "bower_components",
-    # Build outputs
+    "jspm_packages",
+    ".yarn",
+    ".npm",
+    "site-packages",
+    "Pods",  # iOS CocoaPods
+    "Carthage",  # iOS Carthage
+    # Build outputs (all languages)
     "dist",
     "build",
     "out",
     "target",
     "_build",
+    "bin",
+    "obj",
     ".next",
     ".nuxt",
+    ".output",
+    ".svelte-kit",
+    ".vercel",
+    ".netlify",
+    ".parcel-cache",
+    ".turbo",
     "__pycache__",
     "*.pyc",
     ".pytest_cache",
     "coverage",
     ".coverage",
     "htmlcov",
+    ".nyc_output",
+    # Lock files (large, auto-generated)
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "composer.lock",
+    "Gemfile.lock",
+    "poetry.lock",
+    "Cargo.lock",
+    "go.sum",
     # IDE/Editor
     ".idea",
     ".vscode",
@@ -73,26 +97,47 @@ DEFAULT_IGNORE_PATTERNS = {
     "env",
     ".env",
     "virtualenv",
-    # Dependencies
+    # Dependencies & caches
     ".tox",
     ".nox",
     ".eggs",
     "*.egg-info",
+    ".cache",
+    ".gradle",
+    ".m2",
+    ".ivy2",
     # Misc
     ".DS_Store",
     "Thumbs.db",
     "*.log",
-    "*.lock",
-    "*.lockb",
-    # Large binary files
+    # Large/minified files
     "*.min.js",
     "*.min.css",
     "*.bundle.js",
     "*.chunk.js",
+    "*.map",  # Source maps
     # Database files
     "*.db",
     "*.sqlite",
     "*.sqlite3",
+    # Generated documentation
+    "docs/_build",
+    "site",  # MkDocs output
+    "_site",  # Jekyll output
+    # TeX/LaTeX build artifacts
+    "*.aux",
+    "*.bbl",
+    "*.blg",
+    "*.fdb_latexmk",
+    "*.fls",
+    "*.lof",
+    "*.lot",
+    "*.out",
+    "*.toc",
+    "*.synctex.gz",
+    "*.bcf",
+    "*.run.xml",
+    "_minted*",  # minted package output
 }
 
 # Extensions to index by default
@@ -245,6 +290,11 @@ class AutoIndexer:
 
         self._init_db()
 
+    def _get_max_commits(self) -> int:
+        """Get max commits from config (0 means unlimited, returns large number)."""
+        max_commits = self.config.max_commits
+        return max_commits if max_commits > 0 else 999999
+
     def _init_db(self) -> None:
         """Initialize index tracking table."""
         conn = sqlite3.connect(self.db_path)
@@ -366,6 +416,133 @@ class AutoIndexer:
             )
             for row in rows
         ]
+
+    def cleanup_stale_indexes(self, dry_run: bool = False, require_git: bool = True) -> dict:
+        """
+        Remove indexes for repositories that no longer exist on disk.
+
+        Args:
+            dry_run: If True, only report what would be deleted without deleting
+            require_git: If True, also remove indexes for paths without .git directory
+
+        Returns:
+            Dict with 'removed' (list of removed indexes) and 'kept' (list of valid indexes)
+        """
+        indexes = self.list_all_indexes()
+        removed = []
+        kept = []
+
+        for idx in indexes:
+            repo_path = Path(idx.repo_path) if idx.repo_path else None
+            is_stale = False
+            reason = None
+
+            if not idx.repo_path:
+                # No path stored - mark as stale
+                is_stale = True
+                reason = "no_path"
+            elif not repo_path.exists():
+                # Path doesn't exist anymore
+                is_stale = True
+                reason = "path_missing"
+            elif require_git and not (repo_path / ".git").exists():
+                # Not a git repo (might be a subdir that was indexed)
+                is_stale = True
+                reason = "not_git_repo"
+
+            if is_stale:
+                removed.append((idx, reason))
+            else:
+                kept.append(idx)
+
+        if not dry_run:
+            for idx, reason in removed:
+                self.delete_index(idx.namespace_id)
+
+        return {
+            "removed": [
+                {
+                    "namespace_id": idx.namespace_id,
+                    "repo_path": idx.repo_path,
+                    "files_indexed": idx.files_indexed,
+                    "commits_indexed": idx.commits_indexed,
+                    "reason": reason,
+                }
+                for idx, reason in removed
+            ],
+            "kept": [
+                {
+                    "namespace_id": idx.namespace_id,
+                    "repo_path": idx.repo_path,
+                    "files_indexed": idx.files_indexed,
+                    "commits_indexed": idx.commits_indexed,
+                }
+                for idx in kept
+            ],
+        }
+
+    def delete_index(self, namespace_id: str) -> bool:
+        """
+        Delete an index by namespace ID.
+
+        Args:
+            namespace_id: The namespace ID to delete
+
+        Returns:
+            True if deleted, False if not found
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Check if it exists
+        cursor.execute(
+            "SELECT namespace_id FROM index_status WHERE namespace_id = ?",
+            (namespace_id,),
+        )
+        if not cursor.fetchone():
+            conn.close()
+            return False
+
+        # Delete from index_status
+        cursor.execute("DELETE FROM index_status WHERE namespace_id = ?", (namespace_id,))
+
+        # Delete from indexed_files
+        cursor.execute("DELETE FROM indexed_files WHERE namespace_id = ?", (namespace_id,))
+
+        # Delete from indexed_commits
+        cursor.execute("DELETE FROM indexed_commits WHERE namespace_id = ?", (namespace_id,))
+
+        conn.commit()
+        conn.close()
+
+        logger.info(f"Deleted index for namespace: {namespace_id}")
+        return True
+
+    def delete_index_by_path(self, repo_path: str | Path) -> bool:
+        """
+        Delete an index by repository path.
+
+        Args:
+            repo_path: The repository path to find and delete
+
+        Returns:
+            True if deleted, False if not found
+        """
+        repo_path_str = str(Path(repo_path).resolve())
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT namespace_id FROM index_status WHERE repo_path = ?",
+            (repo_path_str,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            return self.delete_index(row[0])
+        return False
 
     def should_index(self, namespace_id: str, repo_path: Path | None = None) -> bool:
         """
@@ -510,6 +687,7 @@ class AutoIndexer:
         storage: StorageRouter | None = None,
         mode: IndexMode = IndexMode.ALL,
         parallel_workers: int | None = None,
+        max_commits: int | None = None,
     ) -> dict:
         """
         Index all files in repository to both SQLite and ChromaDB.
@@ -525,6 +703,7 @@ class AutoIndexer:
             storage: StorageRouter for unified SQLite + ChromaDB storage
             mode: IndexMode.ALL, FILES_ONLY, or COMMITS_ONLY
             parallel_workers: Number of parallel workers (None = auto)
+            max_commits: Maximum commits to index (None = unlimited)
 
         Returns:
             Indexing statistics
@@ -540,6 +719,19 @@ class AutoIndexer:
         logger.info(
             f"Starting indexing for {repo_path} (namespace: {namespace_id}, mode: {mode.value})"
         )
+
+        # Clear existing memories for this namespace when doing full re-index
+        # This prevents duplicate memories when using --force
+        if not incremental:
+            if storage is not None:
+                deleted = storage.delete_by_namespace(namespace_id)
+            elif rag_backend is not None:
+                deleted = rag_backend.delete_by_namespace(namespace_id)
+            else:
+                deleted = 0
+            if deleted > 0:
+                logger.info(f"Cleared {deleted} existing memories for full re-index")
+            self.clear_index(namespace_id)
 
         files_indexed = 0
         memories_created = 0
@@ -668,7 +860,7 @@ class AutoIndexer:
                 repo_path=repo_path,
                 namespace_id=namespace_id,
                 rag_backend=rag_backend,
-                max_commits=100,
+                max_commits=max_commits if max_commits is not None else self._get_max_commits(),
                 on_progress=on_progress,
                 incremental=incremental,
                 project=project,

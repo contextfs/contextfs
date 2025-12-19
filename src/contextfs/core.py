@@ -419,6 +419,36 @@ class ContextFS:
         """List all indexed repositories."""
         return self._get_auto_indexer().list_all_indexes()
 
+    def cleanup_indexes(self, dry_run: bool = False) -> dict:
+        """
+        Remove indexes for repositories that no longer exist on disk.
+
+        Args:
+            dry_run: If True, only report what would be deleted without deleting
+
+        Returns:
+            Dict with 'removed' (list of removed indexes) and 'kept' (list of valid indexes)
+        """
+        return self._get_auto_indexer().cleanup_stale_indexes(dry_run=dry_run)
+
+    def delete_index(self, namespace_id: str | None = None, repo_path: str | None = None) -> bool:
+        """
+        Delete a specific index by namespace ID or repository path.
+
+        Args:
+            namespace_id: The namespace ID to delete
+            repo_path: The repository path to delete
+
+        Returns:
+            True if deleted, False if not found
+        """
+        indexer = self._get_auto_indexer()
+        if namespace_id:
+            return indexer.delete_index(namespace_id)
+        elif repo_path:
+            return indexer.delete_index_by_path(repo_path)
+        return False
+
     def index_directory(
         self,
         root_dir: Path,
