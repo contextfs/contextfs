@@ -1035,7 +1035,7 @@ def reindex_all(
     total_memories = 0
 
     for repo_info in repos:
-        repo_name = repo_info.get("name", "unknown")
+        repo_name = repo_info.get("source_repo", "unknown")
 
         # Try to find the repo path from common locations
         possible_paths = [
