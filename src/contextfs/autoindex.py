@@ -879,6 +879,7 @@ class AutoIndexer:
                 files_indexed,
                 commits_indexed,
                 memories_created,
+                incremental=incremental,
             )
         else:
             logger.debug("Skipping status update - no new files indexed (incremental mode)")
@@ -1184,12 +1185,31 @@ Files changed: {", ".join(commit["files"][:10])}{"..." if len(commit["files"]) >
         files_indexed: int,
         commits_indexed: int,
         memories_created: int,
+        incremental: bool = True,
     ) -> None:
-        """Update index status."""
+        """Update index status.
+
+        For incremental indexing, accumulates counts.
+        For full indexing, replaces counts.
+        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         commit_hash = self._get_commit_hash(repo_path)
+
+        if incremental:
+            # Check if record exists
+            cursor.execute(
+                "SELECT files_indexed, commits_indexed, memories_created FROM index_status WHERE namespace_id = ?",
+                (namespace_id,),
+            )
+            row = cursor.fetchone()
+
+            if row:
+                # Accumulate counts for incremental indexing
+                files_indexed += row[0] or 0
+                commits_indexed += row[1] or 0
+                memories_created += row[2] or 0
 
         cursor.execute(
             """
