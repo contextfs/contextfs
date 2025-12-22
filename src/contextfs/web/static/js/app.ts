@@ -128,6 +128,7 @@ class ContextFSBrowser {
         }
 
         // Load initial data
+        await this.loadTypes();
         await this.loadNamespaces();
         await this.loadRecent();
         await this.loadSessions();
@@ -779,6 +780,58 @@ class ContextFSBrowser {
             </div>
             ${typeBreakdown}
         `;
+    }
+
+    private async loadTypes(): Promise<void> {
+        interface TypeInfo {
+            value: string;
+            label: string;
+            color: string;
+            description: string;
+            category: string;
+        }
+
+        try {
+            const response = await fetch(`${this.apiBase}/types`);
+            const data: APIResponse<{ types: TypeInfo[]; core: TypeInfo[]; extended: TypeInfo[] }> = await response.json();
+
+            if (!data.success || !data.data) {
+                console.warn('Failed to load types from API');
+                return;
+            }
+
+            const { core, extended } = data.data;
+
+            // Create Core optgroup
+            if (core && core.length > 0) {
+                const coreGroup = document.createElement('optgroup');
+                coreGroup.label = 'Core';
+                core.forEach((type) => {
+                    const option = document.createElement('option');
+                    option.value = type.value;
+                    option.textContent = type.label;
+                    option.title = type.description;
+                    coreGroup.appendChild(option);
+                });
+                this.typeFilter.appendChild(coreGroup);
+            }
+
+            // Create Extended optgroup
+            if (extended && extended.length > 0) {
+                const extendedGroup = document.createElement('optgroup');
+                extendedGroup.label = 'Extended';
+                extended.forEach((type) => {
+                    const option = document.createElement('option');
+                    option.value = type.value;
+                    option.textContent = type.label;
+                    option.title = type.description;
+                    extendedGroup.appendChild(option);
+                });
+                this.typeFilter.appendChild(extendedGroup);
+            }
+        } catch (error) {
+            console.warn('Failed to load types:', error);
+        }
     }
 
     private async loadNamespaces(): Promise<void> {

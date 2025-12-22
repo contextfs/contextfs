@@ -29,13 +29,24 @@ def _ensure_fts_table(conn) -> None:
     if result.fetchone() is not None:
         return  # FTS table already exists
 
-    # Create FTS table
+    # Create FTS table with all required columns
+    # Searchable: content, summary, tags
+    # Filterable (UNINDEXED): id, type, namespace_id, source_repo, source_tool, project
     conn.execute(
         sa.text("""
         CREATE VIRTUAL TABLE memories_fts USING fts5(
-            id, content, summary, tags,
+            id UNINDEXED,
+            content,
+            summary,
+            tags,
+            type UNINDEXED,
+            namespace_id UNINDEXED,
+            source_repo UNINDEXED,
+            source_tool UNINDEXED,
+            project UNINDEXED,
             content='memories',
-            content_rowid='rowid'
+            content_rowid='rowid',
+            tokenize='porter unicode61'
         )
     """)
     )
@@ -43,8 +54,8 @@ def _ensure_fts_table(conn) -> None:
     # Populate FTS index from existing memories
     conn.execute(
         sa.text("""
-        INSERT INTO memories_fts (id, content, summary, tags)
-        SELECT id, content, summary, tags FROM memories
+        INSERT INTO memories_fts (id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
+        SELECT id, content, summary, tags, type, namespace_id, source_repo, source_tool, project FROM memories
     """)
     )
 
@@ -127,20 +138,31 @@ def upgrade() -> None:
     op.create_index("idx_memories_namespace", "memories", ["namespace_id"])
     op.create_index("idx_memories_type", "memories", ["type"])
 
-    # Recreate FTS table
+    # Recreate FTS table with all required columns
+    # Searchable: content, summary, tags
+    # Filterable (UNINDEXED): id, type, namespace_id, source_repo, source_tool, project
     op.execute("DROP TABLE IF EXISTS memories_fts")
     op.execute("""
         CREATE VIRTUAL TABLE memories_fts USING fts5(
-            id, content, summary, tags,
+            id UNINDEXED,
+            content,
+            summary,
+            tags,
+            type UNINDEXED,
+            namespace_id UNINDEXED,
+            source_repo UNINDEXED,
+            source_tool UNINDEXED,
+            project UNINDEXED,
             content='memories',
-            content_rowid='rowid'
+            content_rowid='rowid',
+            tokenize='porter unicode61'
         )
     """)
 
     # Rebuild FTS index
     op.execute("""
-        INSERT INTO memories_fts (id, content, summary, tags)
-        SELECT id, content, summary, tags FROM memories
+        INSERT INTO memories_fts (id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
+        SELECT id, content, summary, tags, type, namespace_id, source_repo, source_tool, project FROM memories
     """)
 
 

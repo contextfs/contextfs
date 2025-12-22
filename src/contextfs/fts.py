@@ -41,6 +41,8 @@ class FTSBackend:
         cursor = conn.cursor()
 
         # Create FTS5 virtual table with BM25 ranking
+        # Searchable: content, summary, tags
+        # Filterable (UNINDEXED): id, type, namespace_id, source_repo, source_tool, project
         cursor.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
                 id UNINDEXED,
@@ -49,6 +51,9 @@ class FTSBackend:
                 tags,
                 type UNINDEXED,
                 namespace_id UNINDEXED,
+                source_repo UNINDEXED,
+                source_tool UNINDEXED,
+                project UNINDEXED,
                 content='memories',
                 content_rowid='rowid',
                 tokenize='porter unicode61'
@@ -58,24 +63,24 @@ class FTSBackend:
         # Triggers to keep FTS in sync with memories table
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
-                INSERT INTO memories_fts(rowid, id, content, summary, tags, type, namespace_id)
-                VALUES (NEW.rowid, NEW.id, NEW.content, NEW.summary, NEW.tags, NEW.type, NEW.namespace_id);
+                INSERT INTO memories_fts(rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
+                VALUES (NEW.rowid, NEW.id, NEW.content, NEW.summary, NEW.tags, NEW.type, NEW.namespace_id, NEW.source_repo, NEW.source_tool, NEW.project);
             END
         """)
 
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
-                INSERT INTO memories_fts(memories_fts, rowid, id, content, summary, tags, type, namespace_id)
-                VALUES ('delete', OLD.rowid, OLD.id, OLD.content, OLD.summary, OLD.tags, OLD.type, OLD.namespace_id);
+                INSERT INTO memories_fts(memories_fts, rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
+                VALUES ('delete', OLD.rowid, OLD.id, OLD.content, OLD.summary, OLD.tags, OLD.type, OLD.namespace_id, OLD.source_repo, OLD.source_tool, OLD.project);
             END
         """)
 
         cursor.execute("""
             CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
-                INSERT INTO memories_fts(memories_fts, rowid, id, content, summary, tags, type, namespace_id)
-                VALUES ('delete', OLD.rowid, OLD.id, OLD.content, OLD.summary, OLD.tags, OLD.type, OLD.namespace_id);
-                INSERT INTO memories_fts(rowid, id, content, summary, tags, type, namespace_id)
-                VALUES (NEW.rowid, NEW.id, NEW.content, NEW.summary, NEW.tags, NEW.type, NEW.namespace_id);
+                INSERT INTO memories_fts(memories_fts, rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
+                VALUES ('delete', OLD.rowid, OLD.id, OLD.content, OLD.summary, OLD.tags, OLD.type, OLD.namespace_id, OLD.source_repo, OLD.source_tool, OLD.project);
+                INSERT INTO memories_fts(rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
+                VALUES (NEW.rowid, NEW.id, NEW.content, NEW.summary, NEW.tags, NEW.type, NEW.namespace_id, NEW.source_repo, NEW.source_tool, NEW.project);
             END
         """)
 
@@ -92,8 +97,8 @@ class FTSBackend:
 
         # Rebuild from memories table
         cursor.execute("""
-            INSERT INTO memories_fts(rowid, id, content, summary, tags, type, namespace_id)
-            SELECT rowid, id, content, summary, tags, type, namespace_id FROM memories
+            INSERT INTO memories_fts(rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
+            SELECT rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project FROM memories
         """)
 
         # Optimize the index
@@ -233,19 +238,23 @@ class FTSBackend:
         cursor = conn.cursor()
 
         try:
-            # Drop and recreate FTS table
+            # Drop and recreate FTS table with full schema
             cursor.execute("DROP TABLE IF EXISTS memories_fts")
             cursor.execute(
                 """
                 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-                    id,
+                    id UNINDEXED,
                     content,
                     summary,
                     tags,
-                    type,
-                    namespace_id,
+                    type UNINDEXED,
+                    namespace_id UNINDEXED,
+                    source_repo UNINDEXED,
+                    source_tool UNINDEXED,
+                    project UNINDEXED,
                     content='memories',
-                    content_rowid='rowid'
+                    content_rowid='rowid',
+                    tokenize='porter unicode61'
                 )
             """
             )
@@ -253,8 +262,8 @@ class FTSBackend:
             # Repopulate from memories table
             cursor.execute(
                 """
-                INSERT INTO memories_fts(rowid, id, content, summary, tags, type, namespace_id)
-                SELECT rowid, id, content, summary, tags, type, namespace_id FROM memories
+                INSERT INTO memories_fts(rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
+                SELECT rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project FROM memories
             """
             )
 
@@ -362,8 +371,8 @@ class FTSBackend:
             """
             INSERT OR REPLACE INTO memories
             (id, content, type, tags, summary, namespace_id, source_file,
-             source_repo, session_id, created_at, updated_at, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             source_repo, source_tool, project, session_id, created_at, updated_at, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 memory.id,
@@ -374,6 +383,8 @@ class FTSBackend:
                 memory.namespace_id,
                 memory.source_file,
                 memory.source_repo,
+                memory.source_tool,
+                memory.project,
                 memory.session_id,
                 memory.created_at.isoformat(),
                 memory.updated_at.isoformat(),

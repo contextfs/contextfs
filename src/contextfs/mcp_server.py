@@ -20,7 +20,10 @@ from mcp.server.stdio import stdio_server
 from mcp.types import GetPromptResult, Prompt, PromptArgument, PromptMessage, TextContent, Tool
 
 from contextfs.core import ContextFS
-from contextfs.schemas import MemoryType
+from contextfs.schemas import MemoryType, get_memory_type_values
+
+# Memory type enum values - generated from schema (single source of truth)
+MEMORY_TYPE_ENUM = get_memory_type_values()
 
 # Global ContextFS instance
 _ctx: ContextFS | None = None
@@ -323,15 +326,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "type": {
                         "type": "string",
-                        "enum": [
-                            "fact",
-                            "decision",
-                            "procedural",
-                            "episodic",
-                            "user",
-                            "code",
-                            "error",
-                        ],
+                        "enum": MEMORY_TYPE_ENUM,
                         "description": "Memory type",
                         "default": "fact",
                     },
@@ -378,15 +373,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "type": {
                         "type": "string",
-                        "enum": [
-                            "fact",
-                            "decision",
-                            "procedural",
-                            "episodic",
-                            "user",
-                            "code",
-                            "error",
-                        ],
+                        "enum": MEMORY_TYPE_ENUM,
                         "description": "Filter by type",
                     },
                     "cross_repo": {
@@ -461,15 +448,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "type": {
                         "type": "string",
-                        "enum": [
-                            "fact",
-                            "decision",
-                            "procedural",
-                            "episodic",
-                            "user",
-                            "code",
-                            "error",
-                        ],
+                        "enum": MEMORY_TYPE_ENUM,
                         "description": "Filter by memory type",
                     },
                     "source_tool": {
@@ -586,6 +565,14 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="contextfs_list_indexes",
+            description="List all indexed repositories with full status including files, commits, memories, and timestamps",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        Tool(
             name="contextfs_update",
             description="Update an existing memory",
             inputSchema={
@@ -601,15 +588,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "type": {
                         "type": "string",
-                        "enum": [
-                            "fact",
-                            "decision",
-                            "procedural",
-                            "episodic",
-                            "user",
-                            "code",
-                            "error",
-                        ],
+                        "enum": MEMORY_TYPE_ENUM,
                         "description": "New memory type (optional)",
                     },
                     "tags": {
@@ -814,15 +793,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "type": {
                         "type": "string",
-                        "enum": [
-                            "fact",
-                            "decision",
-                            "procedural",
-                            "episodic",
-                            "user",
-                            "code",
-                            "error",
-                        ],
+                        "enum": MEMORY_TYPE_ENUM,
                         "description": "Type for merged memory (defaults to first memory's type)",
                     },
                 },
@@ -1558,6 +1529,45 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                         text="No indexing in progress. Use contextfs_index to start.",
                     )
                 ]
+
+        elif name == "contextfs_list_indexes":
+            indexes = ctx.list_indexes()
+
+            if not indexes:
+                return [
+                    TextContent(
+                        type="text",
+                        text="No indexed repositories found. Use contextfs_index to index the current repository.",
+                    )
+                ]
+
+            # Build table output
+            output = ["Full Index Status - All Repositories", ""]
+            output.append(
+                f"{'Namespace':<18} {'Repository':<20} {'Files':>7} {'Commits':>8} {'Memories':>9} {'Indexed At':<16}"
+            )
+            output.append("-" * 85)
+
+            total_files = 0
+            total_commits = 0
+            total_memories = 0
+
+            for idx in sorted(indexes, key=lambda x: x.memories_created, reverse=True):
+                repo_name = idx.repo_path.split("/")[-1] if idx.repo_path else "unknown"
+                indexed_at = str(idx.indexed_at)[:16] if idx.indexed_at else "N/A"
+                output.append(
+                    f"{idx.namespace_id[:18]:<18} {repo_name[:20]:<20} {idx.files_indexed:>7} {idx.commits_indexed:>8} {idx.memories_created:>9} {indexed_at:<16}"
+                )
+                total_files += idx.files_indexed
+                total_commits += idx.commits_indexed
+                total_memories += idx.memories_created
+
+            output.append("-" * 85)
+            output.append(
+                f"{'TOTAL':<18} {f'{len(indexes)} repos':<20} {total_files:>7} {total_commits:>8} {total_memories:>9}"
+            )
+
+            return [TextContent(type="text", text="\n".join(output))]
 
         elif name == "contextfs_update":
             memory_id = arguments.get("id", "")

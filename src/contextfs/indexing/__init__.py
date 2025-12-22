@@ -1,23 +1,23 @@
 """
-Auto-indexing module for ContextFS.
+ContextFS Indexing Package.
 
-DEPRECATED: This module has been moved to contextfs.indexing.
-This file provides backward compatibility - import from contextfs.indexing instead.
+Provides automatic indexing of repositories and files.
 """
 
-# Re-export everything from the new location for backward compatibility
-from contextfs.indexing import (
+from contextfs.indexing.autoindex import (
     DEFAULT_IGNORE_PATTERNS,
+    AutoIndexer,
+    IndexMode,
+    IndexStatus,
+)
+from contextfs.indexing.discovery import (
     DEFAULT_INDEX_EXTENSIONS,
     FRAMEWORK_DETECTORS,
     LANGUAGE_DETECTORS,
     PROJECT_CONTAINER_NAMES,
     TYPE_INDICATORS,
     WORKSPACE_CONFIG_FILES,
-    AutoIndexer,
     FrameworkDetector,
-    IndexMode,
-    IndexStatus,
     LanguageDetector,
     RepoInfo,
     TypeIndicator,

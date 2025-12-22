@@ -12,12 +12,26 @@
     --success: #3fb950;
     --warning: #d29922;
     --error: #f85149;
+    /* Core types */
     --fact: #58a6ff;
     --decision: #a371f7;
     --procedural: #3fb950;
     --episodic: #d29922;
     --user: #f778ba;
     --code: #79c0ff;
+    --error: #f85149;
+    --commit: #8b5cf6;
+    /* Extended types */
+    --todo: #f59e0b;
+    --issue: #ef4444;
+    --api: #06b6d4;
+    --schema: #8b5cf6;
+    --test: #22c55e;
+    --review: #ec4899;
+    --release: #6366f1;
+    --config: #64748b;
+    --dependency: #0ea5e9;
+    --doc: #14b8a6;
     --radius: 6px;
     --shadow: 0 1px 3px rgba(0,0,0,0.12);
 }
@@ -207,6 +221,7 @@ header h1 {
     background: var(--bg-tertiary);
 }
 
+/* Core types */
 .memory-type.fact { color: var(--fact); border: 1px solid var(--fact); }
 .memory-type.decision { color: var(--decision); border: 1px solid var(--decision); }
 .memory-type.procedural { color: var(--procedural); border: 1px solid var(--procedural); }
@@ -214,6 +229,18 @@ header h1 {
 .memory-type.user { color: var(--user); border: 1px solid var(--user); }
 .memory-type.code { color: var(--code); border: 1px solid var(--code); }
 .memory-type.error { color: var(--error); border: 1px solid var(--error); }
+.memory-type.commit { color: var(--commit); border: 1px solid var(--commit); }
+/* Extended types */
+.memory-type.todo { color: var(--todo); border: 1px solid var(--todo); }
+.memory-type.issue { color: var(--issue); border: 1px solid var(--issue); }
+.memory-type.api { color: var(--api); border: 1px solid var(--api); }
+.memory-type.schema { color: var(--schema); border: 1px solid var(--schema); }
+.memory-type.test { color: var(--test); border: 1px solid var(--test); }
+.memory-type.review { color: var(--review); border: 1px solid var(--review); }
+.memory-type.release { color: var(--release); border: 1px solid var(--release); }
+.memory-type.config { color: var(--config); border: 1px solid var(--config); }
+.memory-type.dependency { color: var(--dependency); border: 1px solid var(--dependency); }
+.memory-type.doc { color: var(--doc); border: 1px solid var(--doc); }
 
 .memory-score {
     font-size: 12px;

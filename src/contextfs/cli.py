@@ -71,6 +71,7 @@ def save(
         type=memory_type,
         tags=tag_list,
         summary=summary,
+        source_tool="contextfs-cli",
     )
 
     console.print("[green]Memory saved[/green]")
@@ -1154,6 +1155,73 @@ exit 0
     console.print("\n[green]Done![/green] ContextFS will auto-index on:")
     console.print("  - git commit (indexes changed files)")
     console.print("  - git pull/merge (indexes new files and commits)")
+
+
+@app.command("list-indexes")
+def list_indexes():
+    """Show full index status for all repositories.
+
+    Displays a table with all indexed repositories, including:
+    - Namespace ID
+    - Repository name
+    - Files indexed
+    - Commits indexed
+    - Memories created
+    - Last indexed timestamp
+    """
+    from rich.table import Table
+
+    ctx = get_ctx()
+    indexes = ctx.list_indexes()
+
+    if not indexes:
+        console.print("[yellow]No indexed repositories found.[/yellow]")
+        console.print("Run 'contextfs index' to index the current repository.")
+        return
+
+    table = Table(title="Full Index Status - All Repositories")
+    table.add_column("Namespace", style="cyan")
+    table.add_column("Repository", style="white")
+    table.add_column("Files", justify="right", style="green")
+    table.add_column("Commits", justify="right", style="green")
+    table.add_column("Memories", justify="right", style="green")
+    table.add_column("Indexed At", style="dim")
+
+    total_files = 0
+    total_commits = 0
+    total_memories = 0
+
+    for idx in sorted(indexes, key=lambda x: x.memories_created, reverse=True):
+        # Shorten repo path to just repo name
+        repo_name = idx.repo_path.split("/")[-1] if idx.repo_path else "unknown"
+        # Format datetime
+        indexed_at = str(idx.indexed_at)[:16] if idx.indexed_at else "N/A"
+
+        table.add_row(
+            idx.namespace_id[:16],
+            repo_name,
+            str(idx.files_indexed),
+            str(idx.commits_indexed),
+            str(idx.memories_created),
+            indexed_at,
+        )
+
+        total_files += idx.files_indexed
+        total_commits += idx.commits_indexed
+        total_memories += idx.memories_created
+
+    # Add totals row
+    table.add_section()
+    table.add_row(
+        "TOTAL",
+        f"{len(indexes)} repos",
+        str(total_files),
+        str(total_commits),
+        str(total_memories),
+        "",
+    )
+
+    console.print(table)
 
 
 @app.command("cleanup-indexes")

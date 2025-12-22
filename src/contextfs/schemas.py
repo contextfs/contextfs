@@ -14,13 +14,171 @@ from pydantic import BaseModel, Field
 class MemoryType(str, Enum):
     """Types of memories."""
 
-    FACT = "fact"
-    DECISION = "decision"
-    PROCEDURAL = "procedural"
-    EPISODIC = "episodic"
-    USER = "user"
-    CODE = "code"
-    ERROR = "error"
+    # Core types
+    FACT = "fact"  # Static facts, configurations
+    DECISION = "decision"  # Architectural/design decisions
+    PROCEDURAL = "procedural"  # How-to procedures
+    EPISODIC = "episodic"  # Session/conversation memories
+    USER = "user"  # User preferences
+    CODE = "code"  # Code snippets
+    ERROR = "error"  # Runtime errors, stack traces
+    COMMIT = "commit"  # Git commit history
+
+    # Extended types
+    TODO = "todo"  # Tasks, work items
+    ISSUE = "issue"  # Bugs, problems, tickets
+    API = "api"  # API endpoints, contracts
+    SCHEMA = "schema"  # Data models, DB schemas
+    TEST = "test"  # Test cases, coverage
+    REVIEW = "review"  # PR feedback, code reviews
+    RELEASE = "release"  # Changelogs, versions
+    CONFIG = "config"  # Environment configs
+    DEPENDENCY = "dependency"  # Package versions
+    DOC = "doc"  # Documentation
+
+
+# Centralized type configuration - single source of truth
+# To add a new type: 1) Add to MemoryType enum above, 2) Add config here
+TYPE_CONFIG: dict[str, dict[str, Any]] = {
+    # Core types
+    "fact": {
+        "label": "Fact",
+        "color": "#58a6ff",
+        "description": "Static facts, configurations",
+        "category": "core",
+    },
+    "decision": {
+        "label": "Decision",
+        "color": "#a371f7",
+        "description": "Architectural/design decisions",
+        "category": "core",
+    },
+    "procedural": {
+        "label": "Procedural",
+        "color": "#3fb950",
+        "description": "How-to procedures",
+        "category": "core",
+    },
+    "episodic": {
+        "label": "Episodic",
+        "color": "#d29922",
+        "description": "Session/conversation memories",
+        "category": "core",
+    },
+    "user": {
+        "label": "User",
+        "color": "#f778ba",
+        "description": "User preferences",
+        "category": "core",
+    },
+    "code": {
+        "label": "Code",
+        "color": "#79c0ff",
+        "description": "Code snippets",
+        "category": "core",
+    },
+    "error": {
+        "label": "Error",
+        "color": "#f85149",
+        "description": "Runtime errors, stack traces",
+        "category": "core",
+    },
+    "commit": {
+        "label": "Commit",
+        "color": "#8b5cf6",
+        "description": "Git commit history",
+        "category": "core",
+    },
+    # Extended types
+    "todo": {
+        "label": "Todo",
+        "color": "#f59e0b",
+        "description": "Tasks, work items",
+        "category": "extended",
+    },
+    "issue": {
+        "label": "Issue",
+        "color": "#ef4444",
+        "description": "Bugs, problems, tickets",
+        "category": "extended",
+    },
+    "api": {
+        "label": "API",
+        "color": "#06b6d4",
+        "description": "API endpoints, contracts",
+        "category": "extended",
+    },
+    "schema": {
+        "label": "Schema",
+        "color": "#8b5cf6",
+        "description": "Data models, DB schemas",
+        "category": "extended",
+    },
+    "test": {
+        "label": "Test",
+        "color": "#22c55e",
+        "description": "Test cases, coverage",
+        "category": "extended",
+    },
+    "review": {
+        "label": "Review",
+        "color": "#ec4899",
+        "description": "PR feedback, code reviews",
+        "category": "extended",
+    },
+    "release": {
+        "label": "Release",
+        "color": "#6366f1",
+        "description": "Changelogs, versions",
+        "category": "extended",
+    },
+    "config": {
+        "label": "Config",
+        "color": "#64748b",
+        "description": "Environment configs",
+        "category": "extended",
+    },
+    "dependency": {
+        "label": "Dependency",
+        "color": "#0ea5e9",
+        "description": "Package versions",
+        "category": "extended",
+    },
+    "doc": {
+        "label": "Doc",
+        "color": "#14b8a6",
+        "description": "Documentation",
+        "category": "extended",
+    },
+}
+
+
+def get_memory_types() -> list[dict[str, Any]]:
+    """Get all memory types with their configuration.
+
+    Returns list of dicts with: value, label, color, description, category
+    Use this to dynamically generate UI dropdowns, API schemas, etc.
+    """
+    return [
+        {
+            "value": t.value,
+            **TYPE_CONFIG.get(
+                t.value,
+                {
+                    "label": t.value.title(),
+                    "color": "#888888",
+                    "description": "",
+                    "category": "unknown",
+                },
+            ),
+        }
+        for t in MemoryType
+    ]
+
+
+def get_memory_type_values() -> list[str]:
+    """Get list of all memory type values (for JSON schema enums)."""
+    return [t.value for t in MemoryType]
 
 
 class Namespace(BaseModel):

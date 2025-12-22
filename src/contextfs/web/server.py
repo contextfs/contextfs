@@ -602,6 +602,88 @@ def create_app(
             logger.exception("Stats error")
             return APIResponse(success=False, error=str(e))
 
+    @app.get("/api/types", response_model=APIResponse)
+    async def get_types():
+        """Get all memory types with their configuration (colors, labels, etc).
+
+        Use this endpoint to dynamically populate type dropdowns and styling.
+        """
+        from contextfs.schemas import get_memory_types
+
+        try:
+            types = get_memory_types()
+            # Group by category for easier UI rendering
+            core_types = [t for t in types if t.get("category") == "core"]
+            extended_types = [t for t in types if t.get("category") == "extended"]
+
+            return APIResponse(
+                success=True,
+                data={
+                    "types": types,
+                    "core": core_types,
+                    "extended": extended_types,
+                },
+            )
+        except Exception as e:
+            logger.exception("Types error")
+            return APIResponse(success=False, error=str(e))
+
+    @app.get("/api/indexes", response_model=APIResponse)
+    async def get_indexes():
+        """Get full index status for all repositories.
+
+        Returns list of all indexed repositories with:
+        - namespace_id: Unique namespace identifier
+        - repo_path: Full path to repository
+        - repo_name: Repository directory name
+        - files_indexed: Number of files indexed
+        - commits_indexed: Number of git commits indexed
+        - memories_created: Total memories created from indexing
+        - indexed_at: Timestamp of last indexing
+        """
+        ctx = get_ctx()
+
+        try:
+            indexes = await asyncio.to_thread(ctx.list_indexes)
+
+            total_files = 0
+            total_commits = 0
+            total_memories = 0
+
+            index_list = []
+            for idx in sorted(indexes, key=lambda x: x.memories_created, reverse=True):
+                repo_name = idx.repo_path.split("/")[-1] if idx.repo_path else "unknown"
+                index_list.append(
+                    {
+                        "namespace_id": idx.namespace_id,
+                        "repo_path": idx.repo_path,
+                        "repo_name": repo_name,
+                        "files_indexed": idx.files_indexed,
+                        "commits_indexed": idx.commits_indexed,
+                        "memories_created": idx.memories_created,
+                        "indexed_at": str(idx.indexed_at) if idx.indexed_at else None,
+                    }
+                )
+                total_files += idx.files_indexed
+                total_commits += idx.commits_indexed
+                total_memories += idx.memories_created
+
+            return APIResponse(
+                success=True,
+                data={
+                    "indexes": index_list,
+                    "totals": {
+                        "repositories": len(indexes),
+                        "files": total_files,
+                        "commits": total_commits,
+                        "memories": total_memories,
+                    },
+                },
+            )
+        except Exception as e:
+            logger.exception("Indexes error")
+            return APIResponse(success=False, error=str(e))
+
     @app.get("/api/namespaces", response_model=APIResponse)
     async def get_namespaces():
         """Get list of namespaces with human-readable display names."""
@@ -859,6 +941,17 @@ def mcp_tools_list() -> dict:
                                 "user",
                                 "code",
                                 "error",
+                                "commit",
+                                "todo",
+                                "issue",
+                                "api",
+                                "schema",
+                                "test",
+                                "review",
+                                "release",
+                                "config",
+                                "dependency",
+                                "doc",
                             ],
                             "default": "fact",
                         },

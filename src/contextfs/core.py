@@ -539,6 +539,10 @@ class ContextFS:
         if source_repo is None and self._repo_path:
             source_repo = self._repo_path.name
 
+        # Auto-set project from source_repo if not provided
+        if project is None and source_repo:
+            project = source_repo
+
         memory = Memory(
             content=content,
             type=type,

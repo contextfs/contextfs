@@ -102,7 +102,7 @@ class Config(BaseSettings):
     # =================================================================
     # Indexing Settings
     # =================================================================
-    max_commits: int = 100  # Maximum git commits to index (0 = unlimited)
+    max_commits: int = 500  # Maximum git commits to index (0 = unlimited)
 
     # =================================================================
     # Session Settings

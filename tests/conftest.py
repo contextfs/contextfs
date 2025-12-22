@@ -313,7 +313,7 @@ def fts_backend(temp_dir: Path):
     from contextfs.fts import FTSBackend
 
     # FTS triggers require the memories table to exist
-    # Schema must match what _row_to_memory expects: id, content, type, ...
+    # Schema must match the full memories table including source_tool, project
     db_path = temp_dir / "test.db"
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -327,6 +327,8 @@ def fts_backend(temp_dir: Path):
             namespace_id TEXT NOT NULL,
             source_file TEXT,
             source_repo TEXT,
+            source_tool TEXT,
+            project TEXT,
             session_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,

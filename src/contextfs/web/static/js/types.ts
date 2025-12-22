@@ -3,13 +3,26 @@
  */
 
 export type MemoryType =
+    // Core types
     | 'fact'
     | 'decision'
     | 'procedural'
     | 'episodic'
     | 'user'
     | 'code'
-    | 'error';
+    | 'error'
+    | 'commit'
+    // Extended types
+    | 'todo'
+    | 'issue'
+    | 'api'
+    | 'schema'
+    | 'test'
+    | 'review'
+    | 'release'
+    | 'config'
+    | 'dependency'
+    | 'doc';
 
 export interface Memory {
     id: string;
