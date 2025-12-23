@@ -4,6 +4,7 @@ Implements push/pull endpoints for sync operations with
 vector clock conflict resolution.
 """
 
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -34,6 +35,8 @@ from service.db.models import (
     SyncState,
 )
 from service.db.session import get_session_dependency
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 
@@ -190,6 +193,9 @@ async def _process_memory_push(
             last_modified_by=device_id,
             metadata=memory.metadata,
         )
+        # Store embedding if provided (for sync to other clients)
+        if hasattr(SyncedMemoryModel, "embedding") and memory.embedding:
+            new_memory.embedding = memory.embedding
         session.add(new_memory)
         return "accepted"
 
@@ -210,6 +216,9 @@ async def _process_memory_push(
         existing.deleted_at = memory.deleted_at
         existing.last_modified_by = device_id
         existing.metadata = memory.metadata
+        # Update embedding if provided
+        if hasattr(existing, "embedding") and memory.embedding:
+            existing.embedding = memory.embedding
         return "accepted"
 
     elif client_clock.happens_before(server_clock):
@@ -407,18 +416,8 @@ async def pull_changes(
         or len(edges) >= request.limit
     )
 
-    # Determine next cursor
-    next_cursor = None
-    if has_more:
-        all_updated = []
-        if memories:
-            all_updated.append(memories[-1].updated_at)
-        if sessions:
-            all_updated.append(sessions[-1].updated_at)
-        if edges:
-            all_updated.append(edges[-1].updated_at)
-        if all_updated:
-            next_cursor = min(all_updated)
+    # Calculate next offset for pagination
+    next_offset = request.offset + len(memories) + len(sessions) + len(edges)
 
     await session.commit()
 
@@ -429,7 +428,7 @@ async def pull_changes(
         edges=edges,
         server_timestamp=server_timestamp,
         has_more=has_more,
-        next_cursor=next_cursor,
+        next_offset=next_offset if has_more else 0,
     )
 
 
@@ -449,7 +448,11 @@ async def _pull_memories(
     if conditions:
         query = query.where(and_(*conditions))
 
-    query = query.order_by(SyncedMemoryModel.updated_at.asc()).limit(request.limit)
+    query = (
+        query.order_by(SyncedMemoryModel.updated_at.asc(), SyncedMemoryModel.id.asc())
+        .offset(request.offset)
+        .limit(request.limit)
+    )
 
     result = await session.execute(query)
     rows = result.scalars().all()
@@ -477,6 +480,10 @@ async def _pull_memories(
             deleted_at=m.deleted_at,
             last_modified_by=m.last_modified_by,
             metadata=dict(m.extra_metadata) if m.extra_metadata else {},
+            # Include embedding if available (for sync to client ChromaDB)
+            embedding=list(m.embedding)
+            if hasattr(m, "embedding") and m.embedding is not None
+            else None,
         )
         for m in rows
     ]
@@ -498,7 +505,11 @@ async def _pull_sessions(
     if conditions:
         query = query.where(and_(*conditions))
 
-    query = query.order_by(SyncedSessionModel.updated_at.asc()).limit(request.limit)
+    query = (
+        query.order_by(SyncedSessionModel.updated_at.asc(), SyncedSessionModel.id.asc())
+        .offset(request.offset)
+        .limit(request.limit)
+    )
 
     result = await session.execute(query)
     rows = result.scalars().all()
@@ -538,7 +549,15 @@ async def _pull_edges(
     if request.since_timestamp:
         query = query.where(SyncedEdgeModel.updated_at > request.since_timestamp)
 
-    query = query.order_by(SyncedEdgeModel.updated_at.asc()).limit(request.limit)
+    query = (
+        query.order_by(
+            SyncedEdgeModel.updated_at.asc(),
+            SyncedEdgeModel.from_id.asc(),
+            SyncedEdgeModel.to_id.asc(),
+        )
+        .offset(request.offset)
+        .limit(request.limit)
+    )
 
     result = await session.execute(query)
     rows = result.scalars().all()

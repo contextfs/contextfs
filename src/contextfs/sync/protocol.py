@@ -242,6 +242,7 @@ class SyncPullRequest(BaseModel):
     namespace_ids: list[str] | None = None  # Optional filter
     backend_type: BackendType | None = None
     limit: int = 1000  # Max items per request
+    offset: int = 0  # Offset for pagination
 
 
 class SyncPullResponse(BaseModel):
@@ -253,7 +254,8 @@ class SyncPullResponse(BaseModel):
     edges: list[SyncedEdge] = Field(default_factory=list)
     server_timestamp: datetime = Field(default_factory=datetime.now)
     has_more: bool = False  # True if more pages available
-    next_cursor: datetime | None = None  # Cursor for next page
+    next_cursor: datetime | None = None  # Cursor for next page (deprecated, use next_offset)
+    next_offset: int = 0  # Offset for next page
 
 
 class SyncStatusRequest(BaseModel):

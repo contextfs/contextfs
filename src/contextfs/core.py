@@ -516,6 +516,7 @@ class ContextFS:
         metadata: dict | None = None,
         created_at: datetime | None = None,
         updated_at: datetime | None = None,
+        id: str | None = None,
     ) -> Memory:
         """
         Save content to memory.
@@ -532,6 +533,7 @@ class ContextFS:
             metadata: Additional metadata
             created_at: Original creation timestamp (for sync, defaults to now)
             updated_at: Original update timestamp (for sync, defaults to now)
+            id: Memory ID (for sync, auto-generated if not provided)
 
         Returns:
             Saved Memory object
@@ -547,20 +549,23 @@ class ContextFS:
         if project is None and source_repo:
             project = source_repo
 
-        memory = Memory(
-            content=content,
-            type=type,
-            tags=tags or [],
-            summary=summary,
-            namespace_id=namespace_id or self.namespace_id,
-            source_tool=source_tool,
-            source_repo=source_repo,
-            project=project,
-            session_id=self._current_session.id if self._current_session else None,
-            metadata=metadata or {},
-            created_at=created_at or datetime.now(),
-            updated_at=updated_at or datetime.now(),
-        )
+        memory_kwargs = {
+            "content": content,
+            "type": type,
+            "tags": tags or [],
+            "summary": summary,
+            "namespace_id": namespace_id or self.namespace_id,
+            "source_tool": source_tool,
+            "source_repo": source_repo,
+            "project": project,
+            "session_id": self._current_session.id if self._current_session else None,
+            "metadata": metadata or {},
+            "created_at": created_at or datetime.now(),
+            "updated_at": updated_at or datetime.now(),
+        }
+        if id is not None:
+            memory_kwargs["id"] = id
+        memory = Memory(**memory_kwargs)
 
         # Save to SQLite
         conn = sqlite3.connect(self._db_path)
@@ -568,7 +573,7 @@ class ContextFS:
 
         cursor.execute(
             """
-            INSERT INTO memories (id, content, type, tags, summary, namespace_id,
+            INSERT OR REPLACE INTO memories (id, content, type, tags, summary, namespace_id,
                                   source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
@@ -590,14 +595,48 @@ class ContextFS:
             ),
         )
 
-        # Update FTS
-        cursor.execute(
-            """
-            INSERT INTO memories_fts (id, content, summary, tags)
-            VALUES (?, ?, ?, ?)
-        """,
-            (memory.id, memory.content, memory.summary, " ".join(memory.tags)),
-        )
+        # Update FTS index
+        # For content-linked FTS (content='memories'), we need to use the special rebuild command
+        # First try the direct approach, fall back to rebuild if it fails
+        try:
+            # Get the rowid for this memory
+            cursor.execute("SELECT rowid FROM memories WHERE id = ?", (memory.id,))
+            row = cursor.fetchone()
+            if row:
+                rowid = row[0]
+                # Delete old FTS entry using the special 'delete' command
+                try:
+                    cursor.execute(
+                        "INSERT INTO memories_fts(memories_fts, rowid) VALUES('delete', ?)",
+                        (rowid,),
+                    )
+                except sqlite3.OperationalError:
+                    pass  # May not exist yet
+                # Insert new FTS entry
+                cursor.execute(
+                    """
+                    INSERT INTO memories_fts(rowid, id, content, summary, tags, type, namespace_id, source_repo, source_tool, project)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        rowid,
+                        memory.id,
+                        memory.content,
+                        memory.summary,
+                        " ".join(memory.tags),
+                        memory.type.value if hasattr(memory.type, "value") else memory.type,
+                        memory.namespace_id,
+                        memory.source_repo,
+                        memory.source_tool,
+                        memory.project,
+                    ),
+                )
+        except sqlite3.DatabaseError:
+            # If FTS is corrupted, rebuild it
+            try:
+                cursor.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')")
+            except sqlite3.DatabaseError:
+                pass  # FTS rebuild failed, will be handled later
 
         conn.commit()
         conn.close()
@@ -606,6 +645,85 @@ class ContextFS:
         self.rag.add_memory(memory)
 
         return memory
+
+    def save_batch(
+        self,
+        memories: list[Memory],
+        skip_rag: bool = False,
+    ) -> int:
+        """
+        Save multiple memories in a single transaction for efficiency.
+
+        Used by sync operations to bulk-insert pulled memories.
+
+        Args:
+            memories: List of Memory objects to save
+            skip_rag: If True, skip adding to RAG index (caller will rebuild)
+
+        Returns:
+            Number of memories saved
+        """
+        if not memories:
+            return 0
+
+        conn = sqlite3.connect(self._db_path)
+        cursor = conn.cursor()
+
+        count = 0
+        for memory in memories:
+            try:
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO memories (id, content, type, tags, summary, namespace_id,
+                                      source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        memory.id,
+                        memory.content,
+                        memory.type.value if hasattr(memory.type, "value") else memory.type,
+                        json.dumps(memory.tags),
+                        memory.summary,
+                        memory.namespace_id,
+                        memory.source_file,
+                        memory.source_repo,
+                        memory.source_tool,
+                        memory.project,
+                        memory.session_id,
+                        memory.created_at.isoformat()
+                        if hasattr(memory.created_at, "isoformat")
+                        else memory.created_at,
+                        memory.updated_at.isoformat()
+                        if hasattr(memory.updated_at, "isoformat")
+                        else memory.updated_at,
+                        json.dumps(memory.metadata) if memory.metadata else "{}",
+                    ),
+                )
+                count += 1
+            except Exception as e:
+                logger.warning(f"Failed to save memory {memory.id}: {e}")
+
+        # Commit all changes
+        conn.commit()
+
+        # Rebuild FTS index once (much faster than individual updates)
+        try:
+            cursor.execute("INSERT INTO memories_fts(memories_fts) VALUES('rebuild')")
+            conn.commit()
+        except sqlite3.DatabaseError as e:
+            logger.warning(f"FTS rebuild failed: {e}")
+
+        conn.close()
+
+        # Add to RAG index in batch
+        if not skip_rag:
+            for memory in memories:
+                try:
+                    self.rag.add_memory(memory)
+                except Exception as e:
+                    logger.warning(f"Failed to add memory {memory.id} to RAG: {e}")
+
+        return count
 
     def search(
         self,

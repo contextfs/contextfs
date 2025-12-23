@@ -330,9 +330,14 @@ class SyncClient:
             memories = self._get_local_changes(namespace_ids, push_all=push_all)
 
         synced_memories = []
+        memory_clocks: dict[str, VectorClock] = {}  # Track clocks for updating after push
+
+        # Get embeddings from ChromaDB for all memories being pushed
+        memory_embeddings = self._get_embeddings_from_chroma([m.id for m in memories])
+
         for m in memories:
-            # Get or create vector clock
-            clock_data = getattr(m, "vector_clock", None)
+            # Get vector clock from metadata (stored after previous sync)
+            clock_data = m.metadata.get("_vector_clock") if m.metadata else None
             if isinstance(clock_data, str):
                 clock = VectorClock.from_json(clock_data)
             elif isinstance(clock_data, dict):
@@ -341,6 +346,7 @@ class SyncClient:
                 clock = VectorClock()
 
             clock = clock.increment(self.device_id)
+            memory_clocks[m.id] = clock  # Save for later update
 
             # Normalize paths
             paths = self._normalize_memory_paths(m)
@@ -367,6 +373,8 @@ class SyncClient:
                     content_hash=self.compute_content_hash(m.content),
                     deleted_at=getattr(m, "deleted_at", None),
                     metadata=m.metadata,
+                    # Include embedding for sync to server
+                    embedding=memory_embeddings.get(m.id),
                 )
             )
 
@@ -384,13 +392,40 @@ class SyncClient:
 
         result = SyncPushResponse.model_validate(response.json())
         self._last_sync = result.server_timestamp
+        self._last_push = result.server_timestamp
         self._save_sync_state()
+
+        # Update local memories with new vector clocks after successful push
+        if result.accepted > 0:
+            self._update_local_vector_clocks(memories, memory_clocks)
 
         logger.info(
             f"Push complete: {result.accepted} accepted, "
             f"{result.rejected} rejected, {len(result.conflicts)} conflicts"
         )
         return result
+
+    def _update_local_vector_clocks(
+        self, memories: list[Memory], clocks: dict[str, VectorClock]
+    ) -> None:
+        """Update local memories with vector clocks after successful push."""
+        conn = sqlite3.connect(self._get_db_path())
+        cursor = conn.cursor()
+
+        for m in memories:
+            if m.id in clocks:
+                # Update metadata with vector clock
+                metadata = m.metadata.copy() if m.metadata else {}
+                metadata["_vector_clock"] = clocks[m.id].to_dict()
+                metadata["_content_hash"] = self.compute_content_hash(m.content)
+
+                cursor.execute(
+                    "UPDATE memories SET metadata = ? WHERE id = ?",
+                    (json.dumps(metadata), m.id),
+                )
+
+        conn.commit()
+        conn.close()
 
     def _get_local_changes(
         self,
@@ -404,8 +439,9 @@ class SyncClient:
             push_all: If True, return all memories regardless of last sync time
         """
         # Query local database for changed memories
-        # Use list_recent to get memories (limit high for sync)
-        memories = self.ctx.list_recent(limit=10000)
+        # No limit for push_all to ensure all memories are synced
+        limit = None if push_all else 10000
+        memories = self.ctx.list_recent(limit=limit) if limit else self._get_all_memories()
 
         # Filter by namespace if specified
         if namespace_ids:
@@ -417,6 +453,18 @@ class SyncClient:
 
         return memories
 
+    def _get_all_memories(self) -> list[Memory]:
+        """Get all memories from local database without limit."""
+        import sqlite3
+
+        conn = sqlite3.connect(self.ctx._db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute("SELECT * FROM memories ORDER BY updated_at DESC")
+        rows = cursor.fetchall()
+        conn.close()
+
+        return [self.ctx._row_to_memory(row) for row in rows]
+
     # =========================================================================
     # Pull Operations
     # =========================================================================
@@ -425,21 +473,30 @@ class SyncClient:
         self,
         since: datetime | None = None,
         namespace_ids: list[str] | None = None,
+        offset: int = 0,
+        update_sync_state: bool = True,
     ) -> SyncPullResponse:
         """
         Pull changes from server.
 
         Args:
-            since: Only pull changes after this timestamp
+            since: Only pull changes after this timestamp (use _UNSET to use _last_sync)
             namespace_ids: Filter by namespaces
+            offset: Offset for pagination
+            update_sync_state: Whether to update _last_sync after this pull (set False for pagination)
 
         Returns:
             SyncPullResponse with memories and sessions
         """
+        # Use _last_sync only if since is not explicitly provided
+        # For pagination (offset > 0), caller should pass the same since value
+        since_timestamp = since if since is not None else self._last_sync
+
         request = SyncPullRequest(
             device_id=self.device_id,
-            since_timestamp=since or self._last_sync,
+            since_timestamp=since_timestamp,
             namespace_ids=namespace_ids,
+            offset=offset,
         )
 
         response = await self._client.post(
@@ -453,8 +510,10 @@ class SyncClient:
         # Apply pulled changes to local database
         await self._apply_pulled_changes(result)
 
-        self._last_sync = result.server_timestamp
-        self._save_sync_state()
+        # Only update sync state on final page
+        if update_sync_state:
+            self._last_sync = result.server_timestamp
+            self._save_sync_state()
 
         logger.info(
             f"Pull complete: {len(result.memories)} memories, " f"{len(result.sessions)} sessions"
@@ -463,7 +522,11 @@ class SyncClient:
 
     async def _apply_pulled_changes(self, response: SyncPullResponse) -> None:
         """Apply pulled changes to local SQLite database."""
-        from contextfs.schemas import MemoryType
+        from contextfs.schemas import Memory, MemoryType
+
+        # Collect memories for batch save
+        memories_to_save: list[Memory] = []
+        deletes_count = 0
 
         for synced in response.memories:
             # Resolve portable paths to local paths
@@ -473,6 +536,7 @@ class SyncClient:
                 # Soft delete locally
                 try:
                     self.ctx.delete(synced.id)
+                    deletes_count += 1
                 except Exception:
                     pass  # Already deleted or doesn't exist
             else:
@@ -481,18 +545,118 @@ class SyncClient:
                 metadata["_vector_clock"] = synced.vector_clock
                 metadata["_content_hash"] = synced.content_hash
 
-                # Save using the save() method parameters, preserving original timestamps
-                self.ctx.save(
+                # Create Memory object for batch save
+                memory = Memory(
+                    id=synced.id,
                     content=synced.content,
                     type=MemoryType(synced.type) if synced.type else MemoryType.FACT,
-                    tags=synced.tags,
+                    tags=synced.tags or [],
                     summary=synced.summary,
-                    namespace_id=synced.namespace_id,
+                    namespace_id=synced.namespace_id or "global",
                     source_repo=paths.get("source_repo") or synced.source_repo,
+                    source_tool=synced.source_tool,
+                    project=synced.project,
                     metadata=metadata,
                     created_at=synced.created_at,
                     updated_at=synced.updated_at,
                 )
+                memories_to_save.append(memory)
+
+        # Batch save all memories (much faster than individual saves)
+        if memories_to_save:
+            saved_count = self.ctx.save_batch(memories_to_save, skip_rag=True)
+            logger.info(f"Batch saved {saved_count} memories, deleted {deletes_count}")
+
+        # Store synced embeddings in ChromaDB (avoids rebuild)
+        embeddings_to_add = [
+            (synced.id, synced.embedding, synced.content, synced.summary, synced.tags, synced.type)
+            for synced in response.memories
+            if synced.embedding is not None and not synced.deleted_at
+        ]
+        if embeddings_to_add:
+            self._add_embeddings_to_chroma(embeddings_to_add)
+            logger.info(f"Added {len(embeddings_to_add)} embeddings to ChromaDB")
+
+    def _add_embeddings_to_chroma(
+        self,
+        embeddings: list[tuple[str, list[float], str, str | None, list[str], str]],
+    ) -> None:
+        """Add synced embeddings to ChromaDB."""
+        try:
+            # Ensure RAG is initialized (lazy init)
+            self.ctx.rag._ensure_initialized()
+            collection = self.ctx.rag._collection
+            if collection is None:
+                logger.warning("ChromaDB collection not available, skipping embedding sync")
+                return
+
+            # Prepare batch data
+            ids = []
+            embedding_vectors = []
+            documents = []
+            metadatas = []
+
+            import json
+
+            for memory_id, embedding, content, summary, tags, mem_type in embeddings:
+                ids.append(memory_id)
+                embedding_vectors.append(embedding)
+                documents.append(content)
+                metadatas.append(
+                    {
+                        "summary": summary or "",
+                        "tags": json.dumps(tags) if tags else "[]",
+                        "type": mem_type,
+                    }
+                )
+
+            # Upsert to ChromaDB
+            collection.upsert(
+                ids=ids,
+                embeddings=embedding_vectors,
+                documents=documents,
+                metadatas=metadatas,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to add embeddings to ChromaDB: {e}")
+
+    def _get_embeddings_from_chroma(self, memory_ids: list[str]) -> dict[str, list[float]]:
+        """Get embeddings from ChromaDB for the given memory IDs."""
+        embeddings: dict[str, list[float]] = {}
+        if not memory_ids:
+            return embeddings
+
+        try:
+            # Ensure RAG is initialized (lazy init)
+            self.ctx.rag._ensure_initialized()
+            collection = self.ctx.rag._collection
+            if collection is None:
+                return embeddings
+
+            # Get embeddings in batches (ChromaDB has limits)
+            batch_size = 100
+            for i in range(0, len(memory_ids), batch_size):
+                batch_ids = memory_ids[i : i + batch_size]
+                try:
+                    result = collection.get(
+                        ids=batch_ids,
+                        include=["embeddings"],
+                    )
+                    # result["embeddings"] may be a numpy array, so check length
+                    result_embeddings = result.get("embeddings")
+                    if result and result_embeddings is not None and len(result_embeddings) > 0:
+                        for mem_id, emb in zip(result["ids"], result_embeddings, strict=False):
+                            if emb is not None:
+                                # Convert numpy array to list for JSON serialization
+                                embeddings[mem_id] = list(emb) if hasattr(emb, "tolist") else emb
+                except Exception as e:
+                    logger.debug(f"Failed to get embeddings for batch: {e}")
+                    continue
+
+        except Exception as e:
+            logger.warning(f"Failed to get embeddings from ChromaDB: {e}")
+
+        return embeddings
 
     # =========================================================================
     # Full Sync

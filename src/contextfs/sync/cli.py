@@ -147,7 +147,14 @@ def push(server: str, namespace: tuple[str, ...], push_all: bool):
     default=None,
     help="Pull changes after this ISO timestamp",
 )
-def pull(server: str, namespace: tuple[str, ...], since: str | None):
+@click.option(
+    "--all",
+    "pull_all",
+    is_flag=True,
+    default=False,
+    help="Pull all memories from server, ignoring last sync time",
+)
+def pull(server: str, namespace: tuple[str, ...], since: str | None, pull_all: bool):
     """Pull changes from the sync server."""
     from contextfs.sync import SyncClient
 
@@ -156,16 +163,56 @@ def pull(server: str, namespace: tuple[str, ...], since: str | None):
 
     async def _pull():
         async with SyncClient(server) as client:
-            return await client.pull(since=since_dt, namespace_ids=namespace_ids)
+            total_memories = 0
+            total_sessions = 0
+            total_edges = 0
+            offset = 0
+
+            # If --all, use epoch time to get all memories
+            # since=None would use _last_sync from state, so we need explicit epoch time
+            from datetime import timezone
+
+            epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+            since_value = since_dt if since_dt else (epoch if pull_all else None)
+
+            while True:
+                # Only update sync state on final page
+                is_final_page = True  # Will be updated below if has_more
+
+                result = await client.pull(
+                    since=since_value,
+                    namespace_ids=namespace_ids,
+                    offset=offset if pull_all else 0,
+                    update_sync_state=False,  # Don't update until we know it's the final page
+                )
+                total_memories += len(result.memories)
+                total_sessions += len(result.sessions)
+                total_edges += len(result.edges)
+
+                # Check if we need to continue pagination
+                if result.has_more and pull_all and result.next_offset > 0:
+                    is_final_page = False
+                    offset = result.next_offset
+                else:
+                    is_final_page = True
+
+                if is_final_page:
+                    # Update sync state now that we're done
+                    client._last_sync = result.server_timestamp
+                    client._save_sync_state()
+                    break
+
+            # Return final result with totals
+            return result, total_memories, total_sessions, total_edges
 
     try:
-        result = run_async(_pull())
+        result, total_mem, total_sess, total_edges = run_async(_pull())
         click.echo("Pull complete:")
-        click.echo(f"  Memories: {len(result.memories)}")
-        click.echo(f"  Sessions: {len(result.sessions)}")
-        click.echo(f"  Edges: {len(result.edges)}")
-        if result.has_more:
-            click.echo("  (More available, run again to continue)")
+        click.echo(f"  Memories: {total_mem}")
+        click.echo(f"  Sessions: {total_sess}")
+        click.echo(f"  Edges: {total_edges}")
+        if result.has_more and not pull_all:
+            click.echo("  (More available, use --all to pull everything)")
         click.echo(f"  Server time: {result.server_timestamp}")
     except Exception as e:
         click.echo(f"Pull failed: {e}", err=True)

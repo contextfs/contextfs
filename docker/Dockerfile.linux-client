@@ -1,0 +1,86 @@
+# Full Ubuntu environment for testing ContextFS sync with AI CLIs
+# Includes: Python 3.12, Node.js 22, Claude Code, Gemini CLI, OpenAI Codex
+
+FROM ubuntu:24.04
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    # Python and build tools
+    python3.12 \
+    python3.12-venv \
+    python3-pip \
+    python3.12-dev \
+    # Node.js prerequisites
+    curl \
+    ca-certificates \
+    gnupg \
+    # Build tools for native extensions
+    build-essential \
+    # Git for version control
+    git \
+    # SQLite for local database
+    sqlite3 \
+    # Useful utilities
+    vim \
+    less \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 22.x (LTS)
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.12 as default
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+
+# Upgrade pip
+RUN python -m pip install --upgrade pip --break-system-packages
+
+# =============================================================================
+# Install AI CLIs via npm
+# =============================================================================
+
+# Claude Code (Anthropic) - https://www.npmjs.com/package/@anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code || echo "Claude Code install failed, continuing..."
+
+# Gemini CLI (Google) - https://www.npmjs.com/package/@google/gemini-cli
+RUN npm install -g @google/gemini-cli || echo "Gemini CLI install failed, continuing..."
+
+# OpenAI Codex CLI - https://www.npmjs.com/package/@openai/codex
+RUN npm install -g @openai/codex || echo "Codex install failed, continuing..."
+
+# =============================================================================
+# Install Python packages for ContextFS
+# =============================================================================
+RUN pip install --break-system-packages \
+    chromadb \
+    sentence-transformers \
+    httpx \
+    pydantic \
+    typer \
+    rich \
+    sqlalchemy \
+    asyncpg
+
+# Create working directory
+WORKDIR /contextfs
+
+# Set up shell environment
+RUN echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.bashrc \
+    && echo 'alias ll="ls -la"' >> /root/.bashrc \
+    && echo 'alias ctx="python -m contextfs.cli"' >> /root/.bashrc \
+    && echo 'echo "=== ContextFS Linux Full Client ==="' >> /root/.bashrc \
+    && echo 'echo "Available AI CLIs:"' >> /root/.bashrc \
+    && echo 'echo "  claude  - Claude Code (Anthropic)"' >> /root/.bashrc \
+    && echo 'echo "  gemini  - Gemini CLI (Google)"' >> /root/.bashrc \
+    && echo 'echo "  codex   - Codex CLI (OpenAI)"' >> /root/.bashrc \
+    && echo 'echo ""' >> /root/.bashrc \
+    && echo 'echo "ContextFS: python -m contextfs.cli or ctx"' >> /root/.bashrc
+
+# Default command
+CMD ["tail", "-f", "/dev/null"]

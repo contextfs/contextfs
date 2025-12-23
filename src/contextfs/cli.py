@@ -1884,22 +1884,108 @@ def graph_status():
         console.print("  3. Restart contextfs")
 
 
-# Register sync subcommand group (Click-based)
-# We need to add the Click group directly to Typer's underlying Click app
-def _register_sync_commands():
-    try:
-        from contextfs.sync.cli import get_sync_commands
+# Register sync subcommand group
+# Create a Typer sub-app that forwards to the Click-based sync CLI
+try:
+    from contextfs.sync.cli import sync_cli as _sync_click_group
 
-        sync_click_group = get_sync_commands()
+    sync_app = typer.Typer(
+        name="sync",
+        help="Sync commands for multi-device memory synchronization.",
+        no_args_is_help=True,
+    )
 
-        # Get the underlying Click app and add the sync group
-        click_app = typer.main.get_command(app)
-        click_app.add_command(sync_click_group, name="sync")
-    except ImportError:
-        pass  # Sync module not available
+    @sync_app.command()
+    def register(
+        server: str = typer.Option(
+            "http://localhost:8766", "-s", "--server", help="Sync server URL"
+        ),
+        name: str = typer.Option(None, "-n", "--name", help="Device name (defaults to hostname)"),
+    ):
+        """Register this device with the sync server."""
+        import sys
 
+        sys.argv = ["contextfs", "sync", "register", "-s", server]
+        if name:
+            sys.argv.extend(["-n", name])
+        _sync_click_group(
+            ["register", "-s", server] + (["-n", name] if name else []), standalone_mode=False
+        )
 
-_register_sync_commands()
+    @sync_app.command()
+    def push(
+        server: str = typer.Option(
+            "http://localhost:8766", "-s", "--server", help="Sync server URL"
+        ),
+        namespace: list[str] = typer.Option([], "-n", "--namespace", help="Namespace ID to sync"),
+        push_all: bool = typer.Option(False, "--all", help="Push all memories"),
+    ):
+        """Push local changes to the sync server."""
+        args = ["push", "-s", server]
+        for ns in namespace:
+            args.extend(["-n", ns])
+        if push_all:
+            args.append("--all")
+        _sync_click_group(args, standalone_mode=False)
+
+    @sync_app.command()
+    def pull(
+        server: str = typer.Option(
+            "http://localhost:8766", "-s", "--server", help="Sync server URL"
+        ),
+        namespace: list[str] = typer.Option([], "-n", "--namespace", help="Namespace ID to sync"),
+        since: str = typer.Option(None, help="Pull changes after this ISO timestamp"),
+        pull_all: bool = typer.Option(False, "--all", help="Pull all memories from server"),
+    ):
+        """Pull changes from the sync server."""
+        args = ["pull", "-s", server]
+        for ns in namespace:
+            args.extend(["-n", ns])
+        if since:
+            args.extend(["--since", since])
+        if pull_all:
+            args.append("--all")
+        _sync_click_group(args, standalone_mode=False)
+
+    @sync_app.command(name="all")
+    def sync_all(
+        server: str = typer.Option(
+            "http://localhost:8766", "-s", "--server", help="Sync server URL"
+        ),
+        namespace: list[str] = typer.Option([], "-n", "--namespace", help="Namespace ID to sync"),
+    ):
+        """Full bidirectional sync (push + pull)."""
+        args = ["all", "-s", server]
+        for ns in namespace:
+            args.extend(["-n", ns])
+        _sync_click_group(args, standalone_mode=False)
+
+    @sync_app.command()
+    def status(
+        server: str = typer.Option(
+            "http://localhost:8766", "-s", "--server", help="Sync server URL"
+        ),
+    ):
+        """Get sync status from server."""
+        _sync_click_group(["status", "-s", server], standalone_mode=False)
+
+    @sync_app.command()
+    def daemon(
+        server: str = typer.Option(
+            "http://localhost:8766", "-s", "--server", help="Sync server URL"
+        ),
+        interval: int = typer.Option(300, "-i", "--interval", help="Sync interval in seconds"),
+        namespace: list[str] = typer.Option([], "-n", "--namespace", help="Namespace ID to sync"),
+    ):
+        """Run sync daemon in background."""
+        args = ["daemon", "-s", server, "-i", str(interval)]
+        for ns in namespace:
+            args.extend(["-n", ns])
+        _sync_click_group(args, standalone_mode=False)
+
+    app.add_typer(sync_app, name="sync")
+except ImportError:
+    pass  # Sync module not available
 
 
 if __name__ == "__main__":
