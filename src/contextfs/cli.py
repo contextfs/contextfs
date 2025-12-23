@@ -84,12 +84,22 @@ def search(
     query: str = typer.Argument(..., help="Search query"),
     limit: int = typer.Option(10, "--limit", "-n", help="Maximum results"),
     type: str | None = typer.Option(None, "--type", "-t", help="Filter by type"),
+    namespace: str | None = typer.Option(
+        None, "--namespace", "-ns", help="Filter to specific namespace (default: search all)"
+    ),
 ):
-    """Search memories."""
+    """Search memories across all repos/namespaces."""
     ctx = get_ctx()
 
     type_filter = MemoryType(type) if type else None
-    results = ctx.search(query, limit=limit, type=type_filter)
+    # Default to cross_repo=True unless a specific namespace is provided
+    results = ctx.search(
+        query,
+        limit=limit,
+        type=type_filter,
+        namespace_id=namespace,
+        cross_repo=(namespace is None),
+    )
 
     if not results:
         console.print("[yellow]No memories found[/yellow]")
