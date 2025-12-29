@@ -132,7 +132,7 @@ async def contextfs_sync_pull(
                 "has_more": result.has_more,
                 "server_timestamp": result.server_timestamp.isoformat(),
                 "message": (
-                    f"Pulled {len(result.memories)} memories, " f"{len(result.sessions)} sessions"
+                    f"Pulled {len(result.memories)} memories, {len(result.sessions)} sessions"
                 ),
             }
         except Exception as e:

@@ -526,7 +526,7 @@ class SyncClient:
             self._save_sync_state()
 
         logger.info(
-            f"Pull complete: {len(result.memories)} memories, " f"{len(result.sessions)} sessions"
+            f"Pull complete: {len(result.memories)} memories, {len(result.sessions)} sessions"
         )
         return result
 

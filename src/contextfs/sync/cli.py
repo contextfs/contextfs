@@ -339,8 +339,7 @@ def daemon(server: str, interval: int, namespace: tuple[str, ...]):
                     result = await client.sync_all(namespace_ids=namespace_ids)
                     now = datetime.now().strftime("%H:%M:%S")
                     click.echo(
-                        f"[{now}] Synced: "
-                        f"+{result.pushed.accepted} ↓{len(result.pulled.memories)}"
+                        f"[{now}] Synced: +{result.pushed.accepted} ↓{len(result.pulled.memories)}"
                     )
                 except Exception as e:
                     now = datetime.now().strftime("%H:%M:%S")
