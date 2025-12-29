@@ -142,8 +142,8 @@ class SyncClient:
         return device_id
 
     def _get_db_path(self) -> Path:
-        """Get path to SQLite database."""
-        return Path.home() / ".contextfs" / "context.db"
+        """Get path to SQLite database (same as ContextFS)."""
+        return self.ctx._db_path
 
     def _ensure_sync_state_table(self, conn: sqlite3.Connection) -> None:
         """Ensure sync_state table exists."""
