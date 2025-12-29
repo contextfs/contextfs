@@ -191,6 +191,50 @@ async def contextfs_sync_all(
             }
 
 
+async def contextfs_sync_diff(
+    server_url: str = DEFAULT_SERVER_URL,
+    namespace_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """
+    Content-addressed sync (Merkle-style, idempotent).
+
+    Compares local content hashes with server state.
+    Run it 100 times, always correct result.
+
+    Args:
+        server_url: URL of the sync server
+        namespace_ids: Optional list of namespace IDs to sync
+
+    Returns:
+        Dict with diff sync result
+    """
+    from contextfs.sync import SyncClient
+
+    async with SyncClient(server_url) as client:
+        try:
+            result = await client.pull_diff(namespace_ids=namespace_ids)
+            return {
+                "success": result.success,
+                "missing_memories": len(result.missing_memories),
+                "missing_sessions": len(result.missing_sessions),
+                "missing_edges": len(result.missing_edges),
+                "deleted": result.total_deleted,
+                "updated": result.total_updated,
+                "server_timestamp": result.server_timestamp.isoformat(),
+                "message": (
+                    f"Diff sync: {len(result.missing_memories)} missing memories, "
+                    f"{result.total_updated} updated, {result.total_deleted} deleted"
+                ),
+            }
+        except Exception as e:
+            logger.error(f"Diff sync failed: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Diff sync failed: {e}",
+            }
+
+
 async def contextfs_sync_status(
     server_url: str = DEFAULT_SERVER_URL,
 ) -> dict[str, Any]:
@@ -313,6 +357,26 @@ MCP_TOOLS = [
             },
         },
         "handler": contextfs_sync_all,
+    },
+    {
+        "name": "contextfs_sync_diff",
+        "description": "Content-addressed sync (idempotent, Merkle-style). Compares content hashes instead of timestamps.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "server_url": {
+                    "type": "string",
+                    "description": "URL of the sync server",
+                    "default": DEFAULT_SERVER_URL,
+                },
+                "namespace_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional list of namespace IDs to sync",
+                },
+            },
+        },
+        "handler": contextfs_sync_diff,
     },
     {
         "name": "contextfs_sync_status",

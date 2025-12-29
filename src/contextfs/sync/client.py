@@ -1113,9 +1113,17 @@ class SyncClient:
                 message=str(e),
             )
 
-        # Pull remote changes
+        # Pull remote changes using content-addressed sync (idempotent)
         try:
-            pull_result = await self.pull(namespace_ids=namespace_ids)
+            diff_result = await self.pull_diff(namespace_ids=namespace_ids)
+            # Convert SyncDiffResponse to SyncPullResponse for compatibility
+            pull_result = SyncPullResponse(
+                success=diff_result.success,
+                memories=diff_result.missing_memories,
+                sessions=diff_result.missing_sessions,
+                edges=diff_result.missing_edges,
+                server_timestamp=diff_result.server_timestamp,
+            )
         except Exception as e:
             logger.error(f"Pull failed: {e}")
             errors.append(f"Pull failed: {e}")

@@ -1961,6 +1961,19 @@ try:
         _sync_click_group(args, standalone_mode=False)
 
     @sync_app.command()
+    def diff(
+        server: str = typer.Option(
+            "http://localhost:8766", "-s", "--server", help="Sync server URL"
+        ),
+        namespace: list[str] = typer.Option([], "-n", "--namespace", help="Namespace ID to sync"),
+    ):
+        """Content-addressed sync (idempotent, Merkle-style)."""
+        args = ["diff", "-s", server]
+        for ns in namespace:
+            args.extend(["-n", ns])
+        _sync_click_group(args, standalone_mode=False)
+
+    @sync_app.command()
     def status(
         server: str = typer.Option(
             "http://localhost:8766", "-s", "--server", help="Sync server URL"
