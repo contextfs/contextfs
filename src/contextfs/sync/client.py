@@ -505,16 +505,15 @@ class SyncClient:
 
         sessions = []
         for row in rows:
-            updated_at = None
-            if "updated_at" in row:
-                updated_at = (
-                    datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
-                )
+            # Sessions use started_at as the reference timestamp
+            timestamp = None
+            if "started_at" in row.keys():  # noqa: SIM118 - sqlite3.Row requires .keys()
+                timestamp = datetime.fromisoformat(row["started_at"]) if row["started_at"] else None
 
             # Filter by last sync if not push_all
-            if self._last_sync and not push_all and updated_at:
+            if self._last_sync and not push_all and timestamp:
                 last_sync_aware = _ensure_tz_aware(self._last_sync)
-                if _ensure_tz_aware(updated_at) <= last_sync_aware:
+                if _ensure_tz_aware(timestamp) <= last_sync_aware:
                     continue
 
             # Get vector clock from metadata or column
@@ -568,16 +567,15 @@ class SyncClient:
 
         edges = []
         for row in rows:
-            updated_at = None
-            if "updated_at" in row:
-                updated_at = (
-                    datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
-                )
+            # Edges use created_at as the reference timestamp
+            timestamp = None
+            if "created_at" in row.keys():  # noqa: SIM118 - sqlite3.Row requires .keys()
+                timestamp = datetime.fromisoformat(row["created_at"]) if row["created_at"] else None
 
             # Filter by last sync if not push_all
-            if self._last_sync and not push_all and updated_at:
+            if self._last_sync and not push_all and timestamp:
                 last_sync_aware = _ensure_tz_aware(self._last_sync)
-                if _ensure_tz_aware(updated_at) <= last_sync_aware:
+                if _ensure_tz_aware(timestamp) <= last_sync_aware:
                     continue
 
             # Get vector clock
