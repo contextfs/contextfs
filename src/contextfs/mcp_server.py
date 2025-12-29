@@ -378,8 +378,8 @@ async def list_tools() -> list[Tool]:
                     },
                     "cross_repo": {
                         "type": "boolean",
-                        "description": "Search across all repos (default: current repo only)",
-                        "default": False,
+                        "description": "Search across all repos (default: true for best results)",
+                        "default": True,
                     },
                     "source_tool": {
                         "type": "string",
@@ -1090,7 +1090,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             query = arguments.get("query", "")
             limit = arguments.get("limit", 5)
             type_filter = MemoryType(arguments["type"]) if arguments.get("type") else None
-            cross_repo = arguments.get("cross_repo", False)
+            # Default to cross_repo=True for better search results (matches CLI behavior)
+            cross_repo = arguments.get("cross_repo", True)
             source_tool = arguments.get("source_tool")
             source_repo = arguments.get("source_repo")
             project = arguments.get("project")
