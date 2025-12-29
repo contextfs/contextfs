@@ -518,7 +518,10 @@ class SyncClient:
                     continue
 
             # Get vector clock from metadata or column
-            clock_data = row.get("vector_clock", "{}")
+            try:
+                clock_data = row["vector_clock"] or "{}"
+            except (KeyError, IndexError):
+                clock_data = "{}"
             if isinstance(clock_data, str):
                 clock = VectorClock.from_json(clock_data) if clock_data else VectorClock()
             else:
@@ -578,7 +581,10 @@ class SyncClient:
                     continue
 
             # Get vector clock
-            clock_data = row.get("vector_clock", "{}")
+            try:
+                clock_data = row["vector_clock"] or "{}"
+            except (KeyError, IndexError):
+                clock_data = "{}"
             if isinstance(clock_data, str):
                 clock = VectorClock.from_json(clock_data) if clock_data else VectorClock()
             else:
