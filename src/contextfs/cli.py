@@ -1926,6 +1926,7 @@ def chroma_server(
         contextfs chroma-server -p 8001            # Custom port
         contextfs chroma-server --daemon           # Run in background
     """
+    import shutil
     import subprocess
     import sys
 
@@ -1934,6 +1935,25 @@ def chroma_server(
         data_path = Path.home() / ".contextfs" / "chroma_db"
 
     data_path.mkdir(parents=True, exist_ok=True)
+
+    # Find the chroma CLI executable
+    chroma_bin = shutil.which("chroma")
+    if not chroma_bin:
+        # Try to find it relative to the Python executable (e.g., in same venv)
+        python_dir = Path(sys.executable).parent
+        possible_paths = [
+            python_dir / "chroma",
+            python_dir.parent / "bin" / "chroma",
+        ]
+        for p in possible_paths:
+            if p.exists():
+                chroma_bin = str(p)
+                break
+
+    if not chroma_bin:
+        console.print("[red]Error: 'chroma' CLI not found.[/red]")
+        console.print("Install it with: pip install chromadb")
+        raise typer.Exit(1)
 
     console.print("[bold]ChromaDB Server[/bold]")
     console.print(f"  Data path: {data_path}")
@@ -1946,9 +1966,7 @@ def chroma_server(
 
     # Build the chroma run command
     cmd = [
-        sys.executable,
-        "-m",
-        "chromadb.cli",
+        chroma_bin,
         "run",
         "--path",
         str(data_path),
@@ -1967,7 +1985,7 @@ def chroma_server(
             start_new_session=True,
         )
         console.print("[green]✅ ChromaDB server started in background[/green]")
-        console.print("   PID can be found with: pgrep -f 'chromadb.cli run'")
+        console.print("   PID can be found with: pgrep -f 'chroma run'")
     else:
         # Run in foreground
         console.print("[dim]Press Ctrl+C to stop[/dim]")
