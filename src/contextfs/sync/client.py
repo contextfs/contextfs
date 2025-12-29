@@ -31,7 +31,9 @@ from contextfs.sync.path_resolver import PathResolver, PortablePath
 from contextfs.sync.protocol import (
     DeviceInfo,
     DeviceRegistration,
+    SyncedEdge,
     SyncedMemory,
+    SyncedSession,
     SyncPullRequest,
     SyncPullResponse,
     SyncPushRequest,
@@ -387,9 +389,15 @@ class SyncClient:
                 )
             )
 
+        # Get sessions and edges to push
+        sessions = self._get_sessions_to_push(push_all=push_all)
+        edges = self._get_edges_to_push(push_all=push_all)
+
         request = SyncPushRequest(
             device_id=self.device_id,
             memories=synced_memories,
+            sessions=sessions,
+            edges=edges,
             last_sync_timestamp=self._last_sync,
         )
 
@@ -410,7 +418,8 @@ class SyncClient:
 
         logger.info(
             f"Push complete: {result.accepted} accepted, "
-            f"{result.rejected} rejected, {len(result.conflicts)} conflicts"
+            f"{result.rejected} rejected, {len(result.conflicts)} conflicts, "
+            f"{len(sessions)} sessions, {len(edges)} edges"
         )
         return result
 
@@ -474,6 +483,120 @@ class SyncClient:
         conn.close()
 
         return [self.ctx._row_to_memory(row) for row in rows]
+
+    def _get_sessions_to_push(self, push_all: bool = False) -> list[SyncedSession]:
+        """Get local sessions changed since last sync."""
+        import sqlite3
+
+        conn = sqlite3.connect(self.ctx._db_path)
+        conn.row_factory = sqlite3.Row
+
+        # Check if sessions table exists
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'"
+        )
+        if not cursor.fetchone():
+            conn.close()
+            return []
+
+        cursor = conn.execute("SELECT * FROM sessions ORDER BY started_at DESC")
+        rows = cursor.fetchall()
+        conn.close()
+
+        sessions = []
+        for row in rows:
+            updated_at = None
+            if "updated_at" in row:
+                updated_at = (
+                    datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
+                )
+
+            # Filter by last sync if not push_all
+            if self._last_sync and not push_all and updated_at:
+                last_sync_aware = _ensure_tz_aware(self._last_sync)
+                if _ensure_tz_aware(updated_at) <= last_sync_aware:
+                    continue
+
+            # Get vector clock from metadata or column
+            clock_data = row.get("vector_clock", "{}")
+            if isinstance(clock_data, str):
+                clock = VectorClock.from_json(clock_data) if clock_data else VectorClock()
+            else:
+                clock = VectorClock()
+            clock = clock.increment(self.device_id)
+
+            sessions.append(
+                SyncedSession(
+                    id=row["id"],
+                    label=row["label"],
+                    namespace_id=row["namespace_id"] or "global",
+                    tool=row["tool"] or "contextfs",
+                    repo_path=row["repo_path"],
+                    branch=row["branch"],
+                    started_at=datetime.fromisoformat(row["started_at"])
+                    if row["started_at"]
+                    else datetime.now(timezone.utc),
+                    ended_at=datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
+                    summary=row["summary"],
+                    vector_clock=clock.to_dict(),
+                )
+            )
+
+        return sessions
+
+    def _get_edges_to_push(self, push_all: bool = False) -> list[SyncedEdge]:
+        """Get local edges changed since last sync."""
+        import sqlite3
+
+        conn = sqlite3.connect(self.ctx._db_path)
+        conn.row_factory = sqlite3.Row
+
+        # Check if memory_edges table exists
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_edges'"
+        )
+        if not cursor.fetchone():
+            conn.close()
+            return []
+
+        cursor = conn.execute("SELECT * FROM memory_edges ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        conn.close()
+
+        edges = []
+        for row in rows:
+            updated_at = None
+            if "updated_at" in row:
+                updated_at = (
+                    datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
+                )
+
+            # Filter by last sync if not push_all
+            if self._last_sync and not push_all and updated_at:
+                last_sync_aware = _ensure_tz_aware(self._last_sync)
+                if _ensure_tz_aware(updated_at) <= last_sync_aware:
+                    continue
+
+            # Get vector clock
+            clock_data = row.get("vector_clock", "{}")
+            if isinstance(clock_data, str):
+                clock = VectorClock.from_json(clock_data) if clock_data else VectorClock()
+            else:
+                clock = VectorClock()
+            clock = clock.increment(self.device_id)
+
+            edges.append(
+                SyncedEdge(
+                    id=f"{row['from_id']}:{row['to_id']}:{row['relation']}",
+                    from_id=row["from_id"],
+                    to_id=row["to_id"],
+                    relation=row["relation"],
+                    weight=row["weight"] or 1.0,
+                    vector_clock=clock.to_dict(),
+                )
+            )
+
+        return edges
 
     # =========================================================================
     # Pull Operations
@@ -587,6 +710,14 @@ class SyncClient:
             self._add_embeddings_to_chroma(embeddings_to_add)
             logger.info(f"Added {len(embeddings_to_add)} embeddings to ChromaDB")
 
+        # Apply pulled sessions
+        if response.sessions:
+            self._apply_pulled_sessions(response.sessions)
+
+        # Apply pulled edges
+        if response.edges:
+            self._apply_pulled_edges(response.edges)
+
     def _add_embeddings_to_chroma(
         self,
         embeddings: list[tuple[str, list[float], str, str | None, list[str], str]],
@@ -629,6 +760,108 @@ class SyncClient:
             )
         except Exception as e:
             logger.warning(f"Failed to add embeddings to ChromaDB: {e}")
+
+    def _apply_pulled_sessions(self, sessions: list[SyncedSession]) -> None:
+        """Apply pulled sessions to local SQLite database."""
+        import sqlite3
+
+        conn = sqlite3.connect(self.ctx._db_path)
+        cursor = conn.cursor()
+
+        # Check if sessions table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'")
+        if not cursor.fetchone():
+            conn.close()
+            logger.warning("Sessions table doesn't exist, skipping session sync")
+            return
+
+        saved_count = 0
+        for session in sessions:
+            if session.deleted_at:
+                # Delete session
+                cursor.execute("DELETE FROM sessions WHERE id = ?", (session.id,))
+            else:
+                # Upsert session
+                cursor.execute(
+                    """
+                    INSERT INTO sessions (id, label, namespace_id, tool, repo_path, branch,
+                                         started_at, ended_at, summary, vector_clock)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        label = excluded.label,
+                        namespace_id = excluded.namespace_id,
+                        tool = excluded.tool,
+                        repo_path = excluded.repo_path,
+                        branch = excluded.branch,
+                        started_at = excluded.started_at,
+                        ended_at = excluded.ended_at,
+                        summary = excluded.summary,
+                        vector_clock = excluded.vector_clock
+                    """,
+                    (
+                        session.id,
+                        session.label,
+                        session.namespace_id,
+                        session.tool,
+                        session.repo_path,
+                        session.branch,
+                        session.started_at.isoformat() if session.started_at else None,
+                        session.ended_at.isoformat() if session.ended_at else None,
+                        session.summary,
+                        json.dumps(session.vector_clock) if session.vector_clock else "{}",
+                    ),
+                )
+                saved_count += 1
+
+        conn.commit()
+        conn.close()
+        logger.info(f"Applied {saved_count} pulled sessions")
+
+    def _apply_pulled_edges(self, edges: list[SyncedEdge]) -> None:
+        """Apply pulled edges to local SQLite database."""
+        import sqlite3
+
+        conn = sqlite3.connect(self.ctx._db_path)
+        cursor = conn.cursor()
+
+        # Check if memory_edges table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='memory_edges'")
+        if not cursor.fetchone():
+            conn.close()
+            logger.warning("Memory edges table doesn't exist, skipping edge sync")
+            return
+
+        saved_count = 0
+        for edge in edges:
+            if edge.deleted_at:
+                # Delete edge
+                cursor.execute(
+                    "DELETE FROM memory_edges WHERE from_id = ? AND to_id = ? AND relation = ?",
+                    (edge.from_id, edge.to_id, edge.relation),
+                )
+            else:
+                # Upsert edge
+                cursor.execute(
+                    """
+                    INSERT INTO memory_edges (from_id, to_id, relation, weight, vector_clock, created_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(from_id, to_id, relation) DO UPDATE SET
+                        weight = excluded.weight,
+                        vector_clock = excluded.vector_clock
+                    """,
+                    (
+                        edge.from_id,
+                        edge.to_id,
+                        edge.relation,
+                        edge.weight,
+                        json.dumps(edge.vector_clock) if edge.vector_clock else "{}",
+                    ),
+                )
+                saved_count += 1
+
+        conn.commit()
+        conn.close()
+        logger.info(f"Applied {saved_count} pulled edges")
 
     def _get_embeddings_from_chroma(self, memory_ids: list[str]) -> dict[str, list[float]]:
         """Get embeddings from ChromaDB for the given memory IDs."""
