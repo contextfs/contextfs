@@ -906,11 +906,6 @@ class AutoIndexer:
             source_repo = repo_path.name
         logger.info(f"Indexing git history for {repo_path} (incremental={incremental})")
 
-        commits = self._get_git_commits(repo_path, max_commits)
-        if not commits:
-            logger.info("No git commits found")
-            return {"commits_indexed": 0, "memories_created": 0, "skipped": 0}
-
         # Get already indexed commits for incremental mode
         indexed_commits = set()
         if incremental:
@@ -923,18 +918,32 @@ class AutoIndexer:
             indexed_commits = {row[0] for row in cursor.fetchall()}
             conn.close()
 
+        # Get latest commits (max_commits limit)
+        # For incremental: we only want NEW commits at the head, not old ones
+        all_commits = self._get_git_commits(repo_path, max_commits)
+
+        if not all_commits:
+            logger.info("No git commits found")
+            return {"commits_indexed": 0, "memories_created": 0, "skipped": 0}
+
+        # Filter to unindexed commits only
+        if incremental:
+            commits = [c for c in all_commits if c["hash"] not in indexed_commits]
+            skipped = len(all_commits) - len(commits)
+        else:
+            commits = all_commits
+            skipped = 0
+
+        if not commits:
+            logger.info(f"All {len(all_commits)} recent commits already indexed")
+            return {"commits_indexed": 0, "memories_created": 0, "skipped": skipped}
+
         commits_indexed = 0
         memories_created = 0
-        skipped = 0
 
         for idx, commit in enumerate(commits):
             if on_progress:
                 on_progress(idx + 1, len(commits), commit["hash"][:8])
-
-            # Skip already indexed commits in incremental mode
-            if incremental and commit["hash"] in indexed_commits:
-                skipped += 1
-                continue
 
             # Create memory for each commit
             content = f"""Git Commit: {commit["hash"][:8]}
