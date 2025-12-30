@@ -1904,6 +1904,252 @@ def graph_status():
         console.print("  3. Restart contextfs")
 
 
+def _check_chroma_running(host: str, port: int) -> dict | None:
+    """Check if ChromaDB server is running. Returns status dict or None if not running."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        url = f"http://{host}:{port}/api/v2/heartbeat"
+        with urllib.request.urlopen(url, timeout=2) as response:
+            data = json.loads(response.read().decode())
+            return {"running": True, "heartbeat": data.get("nanosecond heartbeat")}
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return None
+
+
+def _get_chroma_pid(port: int) -> int | None:
+    """Get PID of running chroma process on specified port."""
+    import subprocess
+
+    try:
+        # Try lsof first (macOS/Linux)
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip().split("\n")[0])
+    except FileNotFoundError:
+        pass
+
+    try:
+        # Fallback: pgrep for chroma run
+        result = subprocess.run(
+            ["pgrep", "-f", f"chroma run.*{port}"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip().split("\n")[0])
+    except FileNotFoundError:
+        pass
+
+    return None
+
+
+def _find_chroma_bin() -> str | None:
+    """Find the chroma CLI executable."""
+    import shutil
+    import sys
+
+    chroma_bin = shutil.which("chroma")
+    if chroma_bin:
+        return chroma_bin
+
+    # Try to find it relative to the Python executable (e.g., in same venv)
+    python_dir = Path(sys.executable).parent
+    possible_paths = [
+        python_dir / "chroma",
+        python_dir.parent / "bin" / "chroma",
+    ]
+    for p in possible_paths:
+        if p.exists():
+            return str(p)
+
+    return None
+
+
+def _get_service_paths() -> dict:
+    """Get platform-specific service file paths."""
+    import platform
+
+    system = platform.system()
+    home = Path.home()
+
+    if system == "Darwin":
+        return {
+            "platform": "macos",
+            "service_file": home / "Library/LaunchAgents/com.contextfs.chromadb.plist",
+            "service_name": "com.contextfs.chromadb",
+        }
+    elif system == "Linux":
+        return {
+            "platform": "linux",
+            "service_file": home / ".config/systemd/user/contextfs-chromadb.service",
+            "service_name": "contextfs-chromadb",
+        }
+    elif system == "Windows":
+        return {
+            "platform": "windows",
+            "service_name": "ContextFS-ChromaDB",
+        }
+    else:
+        return {"platform": "unknown"}
+
+
+def _install_macos_service(host: str, port: int, data_path: Path, chroma_bin: str) -> bool:
+    """Install launchd service on macOS."""
+    import plistlib
+
+    paths = _get_service_paths()
+    plist_path = paths["service_file"]
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+
+    plist_content = {
+        "Label": paths["service_name"],
+        "ProgramArguments": [
+            chroma_bin,
+            "run",
+            "--path",
+            str(data_path),
+            "--host",
+            host,
+            "--port",
+            str(port),
+        ],
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "StandardOutPath": str(Path.home() / ".contextfs/logs/chromadb.log"),
+        "StandardErrorPath": str(Path.home() / ".contextfs/logs/chromadb.err"),
+    }
+
+    # Ensure log directory exists
+    (Path.home() / ".contextfs/logs").mkdir(parents=True, exist_ok=True)
+
+    with open(plist_path, "wb") as f:
+        plistlib.dump(plist_content, f)
+
+    # Load the service
+    import subprocess
+
+    subprocess.run(["launchctl", "load", str(plist_path)], check=True)
+    return True
+
+
+def _install_linux_service(host: str, port: int, data_path: Path, chroma_bin: str) -> bool:
+    """Install systemd user service on Linux."""
+    paths = _get_service_paths()
+    service_path = paths["service_file"]
+    service_path.parent.mkdir(parents=True, exist_ok=True)
+
+    service_content = f"""[Unit]
+Description=ChromaDB Server for ContextFS
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={chroma_bin} run --path {data_path} --host {host} --port {port}
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+"""
+
+    service_path.write_text(service_content)
+
+    # Enable and start the service
+    import subprocess
+
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "--user", "enable", paths["service_name"]], check=True)
+    subprocess.run(["systemctl", "--user", "start", paths["service_name"]], check=True)
+    return True
+
+
+def _install_windows_service(host: str, port: int, data_path: Path, chroma_bin: str) -> bool:
+    """Install Windows Task Scheduler task."""
+    import subprocess
+
+    paths = _get_service_paths()
+    task_name = paths["service_name"]
+
+    # Create XML for scheduled task
+    xml_content = f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>ChromaDB Server for ContextFS</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions>
+    <Exec>
+      <Command>{chroma_bin}</Command>
+      <Arguments>run --path {data_path} --host {host} --port {port}</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"""
+
+    # Write temp XML file and import
+    temp_xml = Path.home() / ".contextfs" / "chromadb_task.xml"
+    temp_xml.parent.mkdir(parents=True, exist_ok=True)
+    temp_xml.write_text(xml_content, encoding="utf-16")
+
+    subprocess.run(
+        ["schtasks", "/create", "/tn", task_name, "/xml", str(temp_xml), "/f"],
+        check=True,
+    )
+    temp_xml.unlink()
+
+    # Start the task now
+    subprocess.run(["schtasks", "/run", "/tn", task_name], check=True)
+    return True
+
+
+def _uninstall_service() -> bool:
+    """Uninstall the service for the current platform."""
+    import subprocess
+
+    paths = _get_service_paths()
+    platform = paths["platform"]
+
+    if platform == "macos":
+        plist_path = paths["service_file"]
+        if plist_path.exists():
+            subprocess.run(["launchctl", "unload", str(plist_path)], check=False)
+            plist_path.unlink()
+        return True
+    elif platform == "linux":
+        service_path = paths["service_file"]
+        if service_path.exists():
+            subprocess.run(["systemctl", "--user", "stop", paths["service_name"]], check=False)
+            subprocess.run(["systemctl", "--user", "disable", paths["service_name"]], check=False)
+            service_path.unlink()
+            subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+        return True
+    elif platform == "windows":
+        subprocess.run(["schtasks", "/delete", "/tn", paths["service_name"], "/f"], check=False)
+        return True
+    return False
+
+
 @app.command("chroma-server")
 def chroma_server(
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
@@ -1912,6 +2158,11 @@ def chroma_server(
         None, "--path", help="ChromaDB data path (default: ~/.contextfs/chroma_db)"
     ),
     background: bool = typer.Option(False, "--daemon", "-d", help="Run in background"),
+    status: bool = typer.Option(False, "--status", "-s", help="Check server status"),
+    install: bool = typer.Option(
+        False, "--install", help="Install as system service (auto-start on boot)"
+    ),
+    uninstall: bool = typer.Option(False, "--uninstall", help="Remove system service"),
 ):
     """Start ChromaDB server for multi-process access.
 
@@ -1925,35 +2176,100 @@ def chroma_server(
         contextfs chroma-server                    # Start on localhost:8000
         contextfs chroma-server -p 8001            # Custom port
         contextfs chroma-server --daemon           # Run in background
+        contextfs chroma-server --status           # Check if running
+        contextfs chroma-server --install          # Install as system service
+        contextfs chroma-server --uninstall        # Remove system service
     """
-    import shutil
     import subprocess
-    import sys
 
     # Default data path
     if data_path is None:
         data_path = Path.home() / ".contextfs" / "chroma_db"
 
-    data_path.mkdir(parents=True, exist_ok=True)
+    # Handle --status
+    if status:
+        server_status = _check_chroma_running(host, port)
+        if server_status:
+            pid = _get_chroma_pid(port)
+            console.print("[green]✅ ChromaDB server is running[/green]")
+            console.print(f"   URL: http://{host}:{port}")
+            if pid:
+                console.print(f"   PID: {pid}")
 
-    # Find the chroma CLI executable
-    chroma_bin = shutil.which("chroma")
-    if not chroma_bin:
-        # Try to find it relative to the Python executable (e.g., in same venv)
-        python_dir = Path(sys.executable).parent
-        possible_paths = [
-            python_dir / "chroma",
-            python_dir.parent / "bin" / "chroma",
-        ]
-        for p in possible_paths:
-            if p.exists():
-                chroma_bin = str(p)
-                break
+            # Check if installed as service
+            paths = _get_service_paths()
+            if paths["platform"] == "macos" and paths["service_file"].exists():
+                console.print("   Service: launchd (auto-start enabled)")
+            elif paths["platform"] == "linux" and paths["service_file"].exists():
+                console.print("   Service: systemd (auto-start enabled)")
+        else:
+            console.print("[red]❌ ChromaDB server is not running[/red]")
+            console.print("   Start with: contextfs chroma-server --daemon")
+        return
 
+    # Handle --uninstall
+    if uninstall:
+        console.print("Removing ChromaDB service...")
+        if _uninstall_service():
+            console.print("[green]✅ Service removed[/green]")
+        else:
+            console.print("[yellow]No service found or unsupported platform[/yellow]")
+        return
+
+    # Find chroma binary (needed for start and install)
+    chroma_bin = _find_chroma_bin()
     if not chroma_bin:
         console.print("[red]Error: 'chroma' CLI not found.[/red]")
         console.print("Install it with: pip install chromadb")
         raise typer.Exit(1)
+
+    data_path.mkdir(parents=True, exist_ok=True)
+
+    # Handle --install
+    if install:
+        # Check if already running
+        if _check_chroma_running(host, port):
+            console.print(f"[yellow]ChromaDB already running on {host}:{port}[/yellow]")
+
+        paths = _get_service_paths()
+        platform = paths["platform"]
+
+        console.print(f"Installing ChromaDB service for {platform}...")
+
+        try:
+            if platform == "macos":
+                _install_macos_service(host, port, data_path, chroma_bin)
+            elif platform == "linux":
+                _install_linux_service(host, port, data_path, chroma_bin)
+            elif platform == "windows":
+                _install_windows_service(host, port, data_path, chroma_bin)
+            else:
+                console.print(f"[red]Unsupported platform: {platform}[/red]")
+                console.print("Use Docker instead: docker-compose --profile with-chromadb up -d")
+                raise typer.Exit(1)
+
+            console.print("[green]✅ Service installed and started[/green]")
+            console.print("   ChromaDB will auto-start on boot")
+            console.print()
+            console.print("[green]To use server mode, set:[/green]")
+            console.print(f"  export CONTEXTFS_CHROMA_HOST={host}")
+            console.print(f"  export CONTEXTFS_CHROMA_PORT={port}")
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]Failed to install service: {e}[/red]")
+            raise typer.Exit(1)
+        return
+
+    # Check if already running before starting
+    if _check_chroma_running(host, port):
+        pid = _get_chroma_pid(port)
+        console.print(f"[yellow]ChromaDB already running on {host}:{port}[/yellow]")
+        if pid:
+            console.print(f"   PID: {pid}")
+        console.print()
+        console.print("[green]To use server mode, set:[/green]")
+        console.print(f"  export CONTEXTFS_CHROMA_HOST={host}")
+        console.print(f"  export CONTEXTFS_CHROMA_PORT={port}")
+        return
 
     console.print("[bold]ChromaDB Server[/bold]")
     console.print(f"  Data path: {data_path}")

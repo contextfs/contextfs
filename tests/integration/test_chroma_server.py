@@ -28,6 +28,26 @@ class TestChromaServerCommand:
         assert result.returncode == 0
         assert "ChromaDB server" in result.stdout or "chroma-server" in result.stdout
 
+    def test_chroma_server_status_not_running(self):
+        """Test --status when server is not running."""
+        # Use a port that's unlikely to be in use
+        port = 19999
+        result = subprocess.run(
+            [
+                "python",
+                "-m",
+                "contextfs.cli",
+                "chroma-server",
+                "--status",
+                "--port",
+                str(port),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "not running" in result.stdout
+
     @pytest.mark.slow
     def test_chroma_server_daemon_starts(self, tmp_path: Path):
         """Test that chroma-server --daemon starts successfully."""
@@ -71,6 +91,40 @@ class TestChromaServerCommand:
                 assert "nanosecond heartbeat" in response.json()
             except requests.exceptions.ConnectionError:
                 pytest.skip("Server did not start (may be due to port conflict)")
+
+            # Test --status when running
+            status_result = subprocess.run(
+                [
+                    "python",
+                    "-m",
+                    "contextfs.cli",
+                    "chroma-server",
+                    "--status",
+                    "--port",
+                    str(port),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            assert "is running" in status_result.stdout
+
+            # Test already-running detection
+            start_again = subprocess.run(
+                [
+                    "python",
+                    "-m",
+                    "contextfs.cli",
+                    "chroma-server",
+                    "--daemon",
+                    "--port",
+                    str(port),
+                    "--path",
+                    str(data_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            assert "already running" in start_again.stdout
 
         finally:
             # Clean up - kill any server we started

@@ -42,7 +42,7 @@ services:
     restart: unless-stopped
 
   # ==========================================================================
-  # ChromaDB Server (Optional - for remote vector search)
+  # ChromaDB Server (RECOMMENDED - prevents corruption from multi-MCP access)
   # ==========================================================================
   chromadb:
     image: chromadb/chroma:latest
