@@ -570,11 +570,12 @@ def index(
     if not repo_path:
         # Not in a git repo
         if not allow_dir:
-            console.print(f"[red]Error: Not a git repository: {start_path.resolve()}[/red]")
-            console.print("[yellow]Use --allow-dir to index non-git directories,[/yellow]")
-            console.print(
-                "[yellow]or use 'contextfs index-dir' to scan for multiple repos.[/yellow]"
-            )
+            if not quiet:
+                console.print(f"[red]Error: Not a git repository: {start_path.resolve()}[/red]")
+                console.print("[yellow]Use --allow-dir to index non-git directories,[/yellow]")
+                console.print(
+                    "[yellow]or use 'contextfs index-dir' to scan for multiple repos.[/yellow]"
+                )
             raise typer.Exit(1)
         repo_path = start_path.resolve()
         if not quiet:
