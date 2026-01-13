@@ -95,22 +95,26 @@ async def create_tables() -> None:
         # Create tables
         await conn.run_sync(Base.metadata.create_all)
 
-        # Run SQL migration files from migrations/ directory
-        migrations_dir = Path(__file__).parent.parent.parent / "migrations"
-        if migrations_dir.exists():
-            for migration_file in sorted(migrations_dir.glob("sync-*.sql")):
-                logger.info(f"Running migration: {migration_file.name}")
-                sql_content = migration_file.read_text()
-                # Execute each statement separately (split on semicolons)
-                for statement in sql_content.split(";"):
-                    statement = statement.strip()
-                    if statement and not statement.startswith("--"):
-                        try:
-                            await conn.execute(__import__("sqlalchemy").text(statement))
-                        except Exception as e:
-                            # Log but continue - most errors are "already exists"
-                            if "already exists" not in str(e).lower():
-                                logger.warning(f"Migration statement error: {e}")
+    # Run SQL migration files from migrations/ directory (outside transaction)
+    # Each statement runs in autocommit mode to avoid transaction abort issues
+    migrations_dir = Path(__file__).parent.parent.parent / "migrations"
+    if migrations_dir.exists():
+        for migration_file in sorted(migrations_dir.glob("sync-*.sql")):
+            logger.info(f"Running migration: {migration_file.name}")
+            sql_content = migration_file.read_text()
+            # Execute each statement separately with autocommit
+            for statement in sql_content.split(";"):
+                statement = statement.strip()
+                if statement and not statement.startswith("--"):
+                    try:
+                        # Use a fresh connection with autocommit for each statement
+                        async with _engine.connect() as stmt_conn:
+                            await stmt_conn.execution_options(isolation_level="AUTOCOMMIT")
+                            await stmt_conn.execute(__import__("sqlalchemy").text(statement))
+                    except Exception as e:
+                        # Log but continue - most errors are "already exists"
+                        if "already exists" not in str(e).lower():
+                            logger.warning(f"Migration statement error: {e}")
 
 
 async def drop_tables() -> None:
