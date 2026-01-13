@@ -168,8 +168,16 @@ async def get_memory(
     session: AsyncSession = Depends(get_session_dependency),
 ) -> MemoryResponse:
     """Get a specific memory by ID."""
+    user, _ = auth
+    user_id = user.id
+
+    # SECURITY: Filter by user_id to prevent accessing other users' memories
     result = await session.execute(
-        select(Memory).where(Memory.id == memory_id, Memory.deleted_at.is_(None))
+        select(Memory).where(
+            Memory.id == memory_id,
+            Memory.deleted_at.is_(None),
+            Memory.user_id == user_id,
+        )
     )
     memory = result.scalar_one_or_none()
 

@@ -413,20 +413,26 @@ async def _process_edge_push(
 async def pull_changes(
     request: SyncPullRequest,
     session: AsyncSession = Depends(get_session_dependency),
+    auth: tuple[User, APIKey] | None = Depends(get_current_user),
 ) -> SyncPullResponse:
     """
     Pull changes from server.
 
     Returns all changes since last sync timestamp, including soft-deleted items
     (so clients can apply the deletion).
+
+    SECURITY: Only returns memories/sessions belonging to the authenticated user.
     """
+    # Get user_id for multi-tenant isolation
+    user_id = auth[0].id if auth else None
+
     server_timestamp = datetime.now(timezone.utc)
 
-    # Query memories
-    memories = await _pull_memories(session, request)
+    # Query memories - filtered by user_id
+    memories = await _pull_memories(session, request, user_id)
 
-    # Query sessions
-    sessions = await _pull_sessions(session, request)
+    # Query sessions - filtered by user_id
+    sessions = await _pull_sessions(session, request, user_id)
 
     # Query edges
     edges = await _pull_edges(session, request)
@@ -460,11 +466,20 @@ async def pull_changes(
 async def _pull_memories(
     session: AsyncSession,
     request: SyncPullRequest,
+    user_id: str | None = None,
 ) -> list[SyncedMemory]:
-    """Pull memories from database."""
+    """Pull memories from database.
+
+    SECURITY: Filters by user_id to ensure multi-tenant isolation.
+    """
     query = select(SyncedMemoryModel)
 
     conditions = []
+
+    # SECURITY: Filter by user_id if authenticated
+    if user_id:
+        conditions.append(SyncedMemoryModel.user_id == user_id)
+
     if request.since_timestamp:
         conditions.append(SyncedMemoryModel.updated_at > request.since_timestamp)
     if request.namespace_ids:
@@ -517,11 +532,20 @@ async def _pull_memories(
 async def _pull_sessions(
     session: AsyncSession,
     request: SyncPullRequest,
+    user_id: str | None = None,
 ) -> list[SyncedSession]:
-    """Pull sessions from database."""
+    """Pull sessions from database.
+
+    SECURITY: Filters by user_id to ensure multi-tenant isolation.
+    """
     query = select(SyncedSessionModel)
 
     conditions = []
+
+    # SECURITY: Filter by user_id if authenticated
+    if user_id:
+        conditions.append(SyncedSessionModel.user_id == user_id)
+
     if request.since_timestamp:
         conditions.append(SyncedSessionModel.updated_at > request.since_timestamp)
     if request.namespace_ids:
@@ -662,6 +686,7 @@ async def get_sync_status(
 async def compute_diff(
     request: SyncManifestRequest,
     session: AsyncSession = Depends(get_session_dependency),
+    auth: tuple[User, APIKey] | None = Depends(get_current_user),
 ) -> SyncDiffResponse:
     """
     Content-addressed sync: compare client manifest with server state.
@@ -672,7 +697,12 @@ async def compute_diff(
       - What client is missing (for pull)
       - What server is missing (for push)
       - What was deleted
+
+    SECURITY: Only compares against memories/sessions belonging to the authenticated user.
     """
+    # Get user_id for multi-tenant isolation
+    user_id = auth[0].id if auth else None
+
     server_timestamp = datetime.now(timezone.utc)
 
     # Build lookup sets from client manifest
@@ -691,10 +721,16 @@ async def compute_diff(
     server_missing_edge_ids: list[str] = []
     updated_count = 0
 
-    # Query all server memories (optionally filtered by namespace)
+    # Query all server memories (filtered by user_id for multi-tenant isolation)
     memory_query = select(SyncedMemoryModel)
+    memory_conditions = []
+    # SECURITY: Filter by user_id
+    if user_id:
+        memory_conditions.append(SyncedMemoryModel.user_id == user_id)
     if request.namespace_ids:
-        memory_query = memory_query.where(SyncedMemoryModel.namespace_id.in_(request.namespace_ids))
+        memory_conditions.append(SyncedMemoryModel.namespace_id.in_(request.namespace_ids))
+    if memory_conditions:
+        memory_query = memory_query.where(and_(*memory_conditions))
     result = await session.execute(memory_query)
     server_memories = result.scalars().all()
 
@@ -722,12 +758,16 @@ async def compute_diff(
         if client_id not in server_memory_ids:
             server_missing_memory_ids.append(client_id)
 
-    # Query all server sessions
+    # Query all server sessions (filtered by user_id for multi-tenant isolation)
     session_query = select(SyncedSessionModel)
+    session_conditions = []
+    # SECURITY: Filter by user_id
+    if user_id:
+        session_conditions.append(SyncedSessionModel.user_id == user_id)
     if request.namespace_ids:
-        session_query = session_query.where(
-            SyncedSessionModel.namespace_id.in_(request.namespace_ids)
-        )
+        session_conditions.append(SyncedSessionModel.namespace_id.in_(request.namespace_ids))
+    if session_conditions:
+        session_query = session_query.where(and_(*session_conditions))
     result = await session.execute(session_query)
     server_sessions = result.scalars().all()
 
