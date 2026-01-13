@@ -237,3 +237,5 @@ jobs:
           railway redeploy --service sync-api-prod --yes
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: bca91012-934d-4d49-a0b5-945764682888
+          RAILWAY_ENVIRONMENT_ID: a8c658f3-83c3-40aa-91f4-2a10941226cb
