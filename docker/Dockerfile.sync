@@ -31,6 +31,7 @@ RUN pip install --no-cache-dir \
 # Copy source code
 COPY src/contextfs /app/src/contextfs
 COPY service /app/service
+COPY migrations /app/migrations
 
 # Set Python path
 ENV PYTHONPATH=/app/src:/app

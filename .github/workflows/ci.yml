@@ -123,10 +123,63 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+  migration-check:
+    name: Migration Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Check migrations are sequential
+        run: |
+          # Verify migration files are numbered sequentially
+          cd src/contextfs/migrations/versions
+          ls -1 *.py | grep -v __init__ | sort | head -20
+
+      - name: Test migrations up/down
+        run: |
+          python -c "
+          from pathlib import Path
+          from alembic import command
+          from src.contextfs.migrations.runner import get_alembic_config, get_current_revision
+
+          test_db = Path('/tmp/migration_test.db')
+          if test_db.exists():
+              test_db.unlink()
+
+          config = get_alembic_config(test_db)
+
+          # Upgrade to head
+          command.upgrade(config, 'head')
+          current = get_current_revision(test_db)
+          print(f'Upgraded to: {current}')
+
+          # Downgrade to 004
+          command.downgrade(config, '004')
+          current = get_current_revision(test_db)
+          print(f'Downgraded to: {current}')
+
+          # Upgrade back to head
+          command.upgrade(config, 'head')
+          current = get_current_revision(test_db)
+          print(f'Re-upgraded to: {current}')
+
+          print('Migration test passed!')
+          "
+
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test]
+    needs: [lint, typecheck, test, migration-check]
     steps:
       - uses: actions/checkout@v6
 

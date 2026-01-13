@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextfs.auth.api_keys import APIKey, User
@@ -33,14 +33,25 @@ from contextfs.sync.vector_clock import VectorClock
 from service.api.auth_middleware import get_current_user
 from service.db.models import (
     Device,
+    SubscriptionModel,
     SyncedEdgeModel,
     SyncedMemoryModel,
     SyncedSessionModel,
     SyncState,
+    TeamMemberModel,
 )
 from service.db.session import get_session_dependency
 
 logger = logging.getLogger(__name__)
+
+
+async def _get_user_team_ids(session: AsyncSession, user_id: str) -> list[str]:
+    """Get all team IDs a user belongs to."""
+    result = await session.execute(
+        select(TeamMemberModel.team_id).where(TeamMemberModel.user_id == user_id)
+    )
+    return [row[0] for row in result.all()]
+
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 
@@ -57,6 +68,8 @@ async def register_device(
     auth: tuple[User, APIKey] | None = Depends(get_current_user),
 ) -> DeviceInfo:
     """Register a new device for sync."""
+    from sqlalchemy import func
+
     user_id = auth[0].id if auth else None
 
     # Check if device already exists
@@ -75,6 +88,30 @@ async def register_device(
             existing.user_id = user_id
         device = existing
     else:
+        # NEW DEVICE: Check device limit before allowing registration
+        if user_id:
+            # Get user's subscription to check device_limit
+            sub_result = await session.execute(
+                select(SubscriptionModel).where(SubscriptionModel.user_id == user_id)
+            )
+            sub = sub_result.scalar_one_or_none()
+            device_limit = sub.device_limit if sub else 2  # Free tier default
+
+            # Count current devices for this user
+            count_result = await session.execute(
+                select(func.count(Device.device_id)).where(Device.user_id == user_id)
+            )
+            current_count = count_result.scalar() or 0
+
+            # Check if at or over limit (unless unlimited = -1)
+            if device_limit != -1 and current_count >= device_limit:
+                tier = sub.tier if sub else "free"
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Device limit reached ({current_count}/{device_limit}). "
+                    f"Upgrade from {tier} tier to add more devices.",
+                )
+
         # Create new device
         device = Device(
             device_id=registration.device_id,
@@ -421,18 +458,22 @@ async def pull_changes(
     Returns all changes since last sync timestamp, including soft-deleted items
     (so clients can apply the deletion).
 
-    SECURITY: Only returns memories/sessions belonging to the authenticated user.
+    SECURITY: Only returns memories/sessions belonging to the authenticated user,
+    plus team-shared items for Team tier users.
     """
     # Get user_id for multi-tenant isolation
     user_id = auth[0].id if auth else None
 
+    # Get user's team memberships for team-shared content
+    user_team_ids = await _get_user_team_ids(session, user_id) if user_id else []
+
     server_timestamp = datetime.now(timezone.utc)
 
-    # Query memories - filtered by user_id
-    memories = await _pull_memories(session, request, user_id)
+    # Query memories - filtered by user_id and team memberships
+    memories = await _pull_memories(session, request, user_id, user_team_ids)
 
-    # Query sessions - filtered by user_id
-    sessions = await _pull_sessions(session, request, user_id)
+    # Query sessions - filtered by user_id and team memberships
+    sessions = await _pull_sessions(session, request, user_id, user_team_ids)
 
     # Query edges
     edges = await _pull_edges(session, request)
@@ -467,18 +508,29 @@ async def _pull_memories(
     session: AsyncSession,
     request: SyncPullRequest,
     user_id: str | None = None,
+    user_team_ids: list[str] | None = None,
 ) -> list[SyncedMemory]:
     """Pull memories from database.
 
     SECURITY: Filters by user_id to ensure multi-tenant isolation.
+    Also includes team-shared memories for Team tier users.
     """
     query = select(SyncedMemoryModel)
 
     conditions = []
 
-    # SECURITY: Filter by user_id if authenticated
+    # SECURITY: Filter by user_id if authenticated, including team-shared memories
     if user_id:
-        conditions.append(SyncedMemoryModel.user_id == user_id)
+        ownership_conditions = [SyncedMemoryModel.user_id == user_id]
+        # Include team-shared memories if user belongs to any teams
+        if user_team_ids:
+            ownership_conditions.append(
+                and_(
+                    SyncedMemoryModel.team_id.in_(user_team_ids),
+                    SyncedMemoryModel.visibility.in_(["team_read", "team_write"]),
+                )
+            )
+        conditions.append(or_(*ownership_conditions))
 
     if request.since_timestamp:
         conditions.append(SyncedMemoryModel.updated_at > request.since_timestamp)
@@ -533,18 +585,29 @@ async def _pull_sessions(
     session: AsyncSession,
     request: SyncPullRequest,
     user_id: str | None = None,
+    user_team_ids: list[str] | None = None,
 ) -> list[SyncedSession]:
     """Pull sessions from database.
 
     SECURITY: Filters by user_id to ensure multi-tenant isolation.
+    Also includes team-shared sessions for Team tier users.
     """
     query = select(SyncedSessionModel)
 
     conditions = []
 
-    # SECURITY: Filter by user_id if authenticated
+    # SECURITY: Filter by user_id if authenticated, including team-shared sessions
     if user_id:
-        conditions.append(SyncedSessionModel.user_id == user_id)
+        ownership_conditions = [SyncedSessionModel.user_id == user_id]
+        # Include team-shared sessions if user belongs to any teams
+        if user_team_ids:
+            ownership_conditions.append(
+                and_(
+                    SyncedSessionModel.team_id.in_(user_team_ids),
+                    SyncedSessionModel.visibility.in_(["team_read", "team_write"]),
+                )
+            )
+        conditions.append(or_(*ownership_conditions))
 
     if request.since_timestamp:
         conditions.append(SyncedSessionModel.updated_at > request.since_timestamp)
@@ -698,10 +761,14 @@ async def compute_diff(
       - What server is missing (for push)
       - What was deleted
 
-    SECURITY: Only compares against memories/sessions belonging to the authenticated user.
+    SECURITY: Only compares against memories/sessions belonging to the authenticated user,
+    plus team-shared items for Team tier users.
     """
     # Get user_id for multi-tenant isolation
     user_id = auth[0].id if auth else None
+
+    # Get user's team memberships for team-shared content
+    user_team_ids = await _get_user_team_ids(session, user_id) if user_id else []
 
     server_timestamp = datetime.now(timezone.utc)
 
@@ -724,9 +791,17 @@ async def compute_diff(
     # Query all server memories (filtered by user_id for multi-tenant isolation)
     memory_query = select(SyncedMemoryModel)
     memory_conditions = []
-    # SECURITY: Filter by user_id
+    # SECURITY: Filter by user_id and team-shared memories
     if user_id:
-        memory_conditions.append(SyncedMemoryModel.user_id == user_id)
+        ownership_conditions = [SyncedMemoryModel.user_id == user_id]
+        if user_team_ids:
+            ownership_conditions.append(
+                and_(
+                    SyncedMemoryModel.team_id.in_(user_team_ids),
+                    SyncedMemoryModel.visibility.in_(["team_read", "team_write"]),
+                )
+            )
+        memory_conditions.append(or_(*ownership_conditions))
     if request.namespace_ids:
         memory_conditions.append(SyncedMemoryModel.namespace_id.in_(request.namespace_ids))
     if memory_conditions:
@@ -761,9 +836,17 @@ async def compute_diff(
     # Query all server sessions (filtered by user_id for multi-tenant isolation)
     session_query = select(SyncedSessionModel)
     session_conditions = []
-    # SECURITY: Filter by user_id
+    # SECURITY: Filter by user_id and team-shared sessions
     if user_id:
-        session_conditions.append(SyncedSessionModel.user_id == user_id)
+        ownership_conditions = [SyncedSessionModel.user_id == user_id]
+        if user_team_ids:
+            ownership_conditions.append(
+                and_(
+                    SyncedSessionModel.team_id.in_(user_team_ids),
+                    SyncedSessionModel.visibility.in_(["team_read", "team_write"]),
+                )
+            )
+        session_conditions.append(or_(*ownership_conditions))
     if request.namespace_ids:
         session_conditions.append(SyncedSessionModel.namespace_id.in_(request.namespace_ids))
     if session_conditions:

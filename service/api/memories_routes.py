@@ -1,19 +1,29 @@
 """Memories API routes for web dashboard.
 
 Provides read-only access to synced memories for the authenticated user.
+Supports team-shared memories for Team tier users.
 """
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextfs.auth.api_keys import APIKey, User
 from service.api.auth_middleware import require_auth
 from service.db.models import SyncedMemoryModel as Memory
+from service.db.models import TeamMemberModel
 from service.db.session import get_session_dependency
 
 router = APIRouter(prefix="/api/memories", tags=["memories"])
+
+
+async def _get_user_team_ids(session: AsyncSession, user_id: str) -> list[str]:
+    """Get all team IDs a user belongs to."""
+    result = await session.execute(
+        select(TeamMemberModel.team_id).where(TeamMemberModel.user_id == user_id)
+    )
+    return [row[0] for row in result.all()]
 
 
 class MemoryResponse(BaseModel):
@@ -30,6 +40,9 @@ class MemoryResponse(BaseModel):
     project: str | None
     created_at: str
     updated_at: str
+    visibility: str = "private"  # private, team_read, team_write
+    team_id: str | None = None
+    is_owner: bool = True  # Whether current user owns this memory
 
 
 class MemorySearchResponse(BaseModel):
@@ -46,6 +59,7 @@ async def search_memories(
     query: str = Query("*", description="Search query (* for all)"),
     type: str | None = Query(None, description="Filter by memory type"),
     namespace: str | None = Query(None, description="Filter by namespace"),
+    scope: str = Query("all", description="Scope: mine, team, all"),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     auth: tuple[User, APIKey] = Depends(require_auth),
@@ -53,19 +67,51 @@ async def search_memories(
 ) -> MemorySearchResponse:
     """Search memories for the authenticated user.
 
-    Filters by user_id for multi-tenant isolation.
+    Scope options:
+    - mine: Only user's own memories
+    - team: Only team-shared memories (not including own)
+    - all: Both own and team-shared memories (default)
     """
     user, _ = auth
     user_id = user.id
 
-    # Build query - filter by user_id for multi-tenant isolation
+    # Get user's team memberships
+    user_team_ids = await _get_user_team_ids(session, user_id)
+
+    # Build ownership filter based on scope
+    if scope == "mine":
+        # Only user's own memories
+        ownership_filter = Memory.user_id == user_id
+    elif scope == "team":
+        # Only team-shared memories (not own)
+        if not user_team_ids:
+            # No teams, return empty
+            return MemorySearchResponse(memories=[], total=0, limit=limit, offset=offset)
+        ownership_filter = and_(
+            Memory.team_id.in_(user_team_ids),
+            Memory.visibility.in_(["team_read", "team_write"]),
+            Memory.user_id != user_id,  # Exclude own memories
+        )
+    else:
+        # All: own + team-shared
+        ownership_conditions = [Memory.user_id == user_id]
+        if user_team_ids:
+            ownership_conditions.append(
+                and_(
+                    Memory.team_id.in_(user_team_ids),
+                    Memory.visibility.in_(["team_read", "team_write"]),
+                )
+            )
+        ownership_filter = or_(*ownership_conditions)
+
+    # Build query
     base_query = select(Memory).where(
         Memory.deleted_at.is_(None),
-        Memory.user_id == user_id,
+        ownership_filter,
     )
     count_query = select(func.count(Memory.id)).where(
         Memory.deleted_at.is_(None),
-        Memory.user_id == user_id,
+        ownership_filter,
     )
 
     # Apply filters
@@ -109,6 +155,9 @@ async def search_memories(
                 project=m.project,
                 created_at=m.created_at.isoformat() if m.created_at else "",
                 updated_at=m.updated_at.isoformat() if m.updated_at else "",
+                visibility=m.visibility or "private",
+                team_id=m.team_id,
+                is_owner=m.user_id == user_id,
             )
             for m in memories
         ],

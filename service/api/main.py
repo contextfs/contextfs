@@ -25,6 +25,7 @@ from service.api.billing_routes import router as billing_router
 from service.api.devices_routes import router as devices_router
 from service.api.memories_routes import router as memories_router
 from service.api.sync_routes import router as sync_router
+from service.api.team_routes import router as team_router
 from service.db.models import APIKeyModel, SubscriptionModel, UsageModel, UserModel
 from service.db.session import close_db, create_tables, get_session, init_db
 
@@ -177,6 +178,7 @@ app.include_router(billing_router)
 app.include_router(devices_router)
 app.include_router(memories_router)
 app.include_router(admin_router)
+app.include_router(team_router)
 
 
 # =============================================================================
@@ -227,6 +229,17 @@ async def root():
             "devices": {
                 "list": "GET /api/devices",
                 "remove": "DELETE /api/devices/{device_id}",
+            },
+            "teams": {
+                "create": "POST /api/teams",
+                "list": "GET /api/teams",
+                "get": "GET /api/teams/{team_id}",
+                "members": "GET /api/teams/{team_id}/members",
+                "invite": "POST /api/teams/{team_id}/invite",
+                "accept": "POST /api/teams/invitations/accept",
+                "update_role": "PUT /api/teams/{team_id}/members/{user_id}/role",
+                "remove_member": "DELETE /api/teams/{team_id}/members/{user_id}",
+                "delete": "DELETE /api/teams/{team_id}",
             },
         },
     }

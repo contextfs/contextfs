@@ -302,6 +302,7 @@ def index_directory(
         True, "--incremental/--full", help="Only index new/changed files"
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Discover repos without indexing"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON (with --dry-run)"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output"),
 ):
     """Recursively scan a directory for git repos and index each.
@@ -326,9 +327,25 @@ def index_directory(
 
     if dry_run:
         # Discovery mode only
-        console.print(f"\n[bold]Discovering git repositories in {path}...[/bold]\n")
-
         repos = ctx.discover_repos(path, max_depth=max_depth)
+
+        if json_output:
+            import json as json_mod
+
+            output = [
+                {
+                    "name": repo["name"],
+                    "path": str(repo["path"]),
+                    "project": repo["project"],
+                    "tags": repo["suggested_tags"],
+                    "remote_url": repo.get("remote_url"),
+                }
+                for repo in repos
+            ]
+            console.print(json_mod.dumps(output, indent=2))
+            return
+
+        console.print(f"\n[bold]Discovering git repositories in {path}...[/bold]\n")
 
         if not repos:
             console.print("[yellow]No git repositories found[/yellow]")
@@ -337,14 +354,19 @@ def index_directory(
         table = Table(title=f"Found {len(repos)} repositories")
         table.add_column("Repository", style="cyan")
         table.add_column("Project", style="magenta")
-        table.add_column("Tags", style="blue")
+        table.add_column("Languages/Frameworks", style="blue")
         table.add_column("Path", style="dim")
 
         for repo in repos:
+            # Separate language and framework tags
+            lang_tags = [t for t in repo["suggested_tags"] if t.startswith("lang:")]
+            fw_tags = [t for t in repo["suggested_tags"] if t.startswith("framework:")]
+            tags_str = ", ".join([t.split(":")[1] for t in lang_tags + fw_tags][:3])
+
             table.add_row(
                 repo["name"],
                 repo["project"] or "-",
-                ", ".join(repo["suggested_tags"][:4]) or "-",
+                tags_str or "-",
                 repo["relative_path"],
             )
 
@@ -421,69 +443,6 @@ def index_directory(
                 )
 
             console.print(repo_table)
-
-
-@index_app.command("discover")
-def discover_repos(
-    path: Path = typer.Argument(None, help="Root directory to scan (default: current directory)"),
-    max_depth: int = typer.Option(5, "--depth", "-d", help="Maximum directory depth"),
-    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
-):
-    """Discover git repositories without indexing.
-
-    Useful for previewing what would be indexed.
-    """
-    import json as json_mod
-
-    target = (path or Path.cwd()).resolve()
-
-    if not target.exists():
-        console.print(f"[red]Path does not exist: {target}[/red]")
-        raise typer.Exit(1)
-
-    ctx = get_ctx()
-    repos = ctx.discover_repos(target, max_depth=max_depth)
-
-    if json_output:
-        # Convert Path objects to strings for JSON
-        output = []
-        for repo in repos:
-            output.append(
-                {
-                    "name": repo["name"],
-                    "path": str(repo["path"]),
-                    "project": repo["project"],
-                    "tags": repo["suggested_tags"],
-                    "remote_url": repo.get("remote_url"),
-                }
-            )
-        console.print(json_mod.dumps(output, indent=2))
-        return
-
-    if not repos:
-        console.print("[yellow]No git repositories found[/yellow]")
-        return
-
-    table = Table(title=f"Found {len(repos)} repositories in {target}")
-    table.add_column("Repository", style="cyan")
-    table.add_column("Project", style="magenta")
-    table.add_column("Languages/Frameworks", style="blue")
-    table.add_column("Path", style="dim")
-
-    for repo in repos:
-        # Separate language and framework tags
-        lang_tags = [t for t in repo["suggested_tags"] if t.startswith("lang:")]
-        fw_tags = [t for t in repo["suggested_tags"] if t.startswith("framework:")]
-        tags_str = ", ".join([t.split(":")[1] for t in lang_tags + fw_tags][:3])
-
-        table.add_row(
-            repo["name"],
-            repo["project"] or "-",
-            tags_str or "-",
-            repo["relative_path"],
-        )
-
-    console.print(table)
 
 
 @index_app.command("reindex-all")

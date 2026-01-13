@@ -18,6 +18,7 @@ from service.db.models import (
     Device,
     SubscriptionModel,
     SyncedMemoryModel,
+    TeamMemberModel,
     UserModel,
 )
 from service.db.session import get_session_dependency
@@ -81,20 +82,73 @@ class AdminStatsResponse(BaseModel):
 # =============================================================================
 
 
-def _is_admin(user: User) -> bool:
-    """Check if user is an admin."""
+def _is_system_admin(user: User) -> bool:
+    """Check if user is a system admin (contextfs.local or contextfs.ai)."""
     return user.email.endswith("@contextfs.local") or user.email.endswith("@contextfs.ai")
 
 
+async def _is_team_admin(session: AsyncSession, user_id: str) -> bool:
+    """Check if user is an admin/owner of any team."""
+    result = await session.execute(
+        select(TeamMemberModel).where(
+            TeamMemberModel.user_id == user_id,
+            TeamMemberModel.role.in_(["owner", "admin"]),
+        )
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def _get_user_team_ids(session: AsyncSession, user_id: str) -> list[str]:
+    """Get all team IDs where user is admin/owner."""
+    result = await session.execute(
+        select(TeamMemberModel.team_id).where(
+            TeamMemberModel.user_id == user_id,
+            TeamMemberModel.role.in_(["owner", "admin"]),
+        )
+    )
+    return [row[0] for row in result.all()]
+
+
+async def _get_team_member_user_ids(session: AsyncSession, team_ids: list[str]) -> set[str]:
+    """Get all user IDs that belong to the given teams."""
+    if not team_ids:
+        return set()
+    result = await session.execute(
+        select(TeamMemberModel.user_id).where(TeamMemberModel.team_id.in_(team_ids))
+    )
+    return {row[0] for row in result.all()}
+
+
 def _require_admin(auth: tuple[User, APIKey]) -> User:
-    """Require admin privileges."""
+    """Require system admin privileges (contextfs.ai/local only)."""
     user, _ = auth
-    if not _is_admin(user):
+    if not _is_system_admin(user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
         )
     return user
+
+
+async def _require_admin_or_team_admin(
+    auth: tuple[User, APIKey], session: AsyncSession
+) -> tuple[User, bool, list[str]]:
+    """Require system admin or team admin privileges.
+
+    Returns (user, is_system_admin, team_ids_if_team_admin)
+    """
+    user, _ = auth
+    if _is_system_admin(user):
+        return user, True, []
+
+    team_ids = await _get_user_team_ids(session, user.id)
+    if team_ids:
+        return user, False, team_ids
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Admin access required",
+    )
 
 
 def _format_dt(dt) -> str:
@@ -176,12 +230,24 @@ async def list_users(
     limit: int = 50,
     offset: int = 0,
 ):
-    """List all users (admin only)."""
-    _require_admin(auth)
+    """List users. System admins see all users, team admins see only their team members."""
+    current_user, is_system_admin, team_ids = await _require_admin_or_team_admin(auth, session)
+
+    # For team admins, get the user IDs in their teams
+    allowed_user_ids: set[str] | None = None
+    if not is_system_admin:
+        allowed_user_ids = await _get_team_member_user_ids(session, team_ids)
+        if not allowed_user_ids:
+            return UserListResponse(users=[], total=0)
 
     # Base query
     query = select(UserModel)
     count_query = select(func.count(UserModel.id))
+
+    # Filter by allowed users (for team admins)
+    if allowed_user_ids is not None:
+        query = query.where(UserModel.id.in_(allowed_user_ids))
+        count_query = count_query.where(UserModel.id.in_(allowed_user_ids))
 
     # Filter by tier if specified
     if tier:
@@ -296,8 +362,8 @@ async def get_user_detail(
         subscription={
             "tier": sub.tier if sub else "free",
             "status": sub.status if sub else "active",
-            "device_limit": sub.device_limit if sub else 3,
-            "memory_limit": sub.memory_limit if sub else 10000,
+            "device_limit": sub.device_limit if sub else 2,
+            "memory_limit": sub.memory_limit if sub else 5000,
             "stripe_customer_id": sub.stripe_customer_id if sub else None,
             "current_period_end": _format_dt(sub.current_period_end) if sub else None,
         },

@@ -226,8 +226,8 @@ async def _get_or_create_user(
         id=str(uuid4()),
         user_id=user_id,
         tier="free",
-        device_limit=3,
-        memory_limit=10000,
+        device_limit=2,
+        memory_limit=5000,
         status="active",
     )
     session.add(subscription)
@@ -304,6 +304,31 @@ async def get_current_user_info(
         name=user.name,
         provider=user.provider,
     )
+
+
+@router.get("/encryption-salt")
+async def get_encryption_salt(
+    auth: tuple[User, APIKey] = Depends(require_auth),
+    session: AsyncSession = Depends(get_session_dependency),
+):
+    """Get encryption salt for the current API key.
+
+    Used by sync client to derive encryption key for E2EE.
+    The encryption key = derive_key(api_key + salt).
+    """
+    _, api_key = auth
+
+    # Fetch the full API key record to get the salt
+    result = await session.execute(select(APIKeyModel).where(APIKeyModel.id == api_key.id))
+    key_record = result.scalar_one_or_none()
+
+    if not key_record or not key_record.encryption_salt:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No encryption salt configured for this API key",
+        )
+
+    return {"salt": key_record.encryption_salt}
 
 
 @router.post("/api-keys", response_model=CreateAPIKeyResponse)

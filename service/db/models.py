@@ -45,6 +45,13 @@ class SyncedMemoryModel(Base):
     # Owner (for multi-tenant isolation)
     user_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
 
+    # Team sharing (for Team tier)
+    owner_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    team_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    visibility: Mapped[str] = mapped_column(
+        Text, default="private"
+    )  # private, team_read, team_write
+
     # Core content
     content: Mapped[str] = mapped_column(Text, nullable=False)
     type: Mapped[str] = mapped_column(Text, nullable=False, default="fact")
@@ -113,6 +120,16 @@ class SyncedSessionModel(Base):
 
     # Primary key
     id: Mapped[str] = mapped_column(Text, primary_key=True)
+
+    # Owner (for multi-tenant isolation)
+    user_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+
+    # Team sharing (for Team tier)
+    owner_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    team_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    visibility: Mapped[str] = mapped_column(
+        Text, default="private"
+    )  # private, team_read, team_write
 
     # Core fields
     label: Mapped[str | None] = mapped_column(Text)
@@ -291,13 +308,19 @@ class SubscriptionModel(Base):
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     user_id: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
-    tier: Mapped[str] = mapped_column(Text, default="free")
+    tier: Mapped[str] = mapped_column(Text, default="free")  # free, pro, team, enterprise
     stripe_customer_id: Mapped[str | None] = mapped_column(Text)
     stripe_subscription_id: Mapped[str | None] = mapped_column(Text)
-    device_limit: Mapped[int] = mapped_column(default=3)
-    memory_limit: Mapped[int] = mapped_column(default=10000)
+    device_limit: Mapped[int] = mapped_column(default=2)  # Free: 2, Pro: 5, Team: 10
+    memory_limit: Mapped[int] = mapped_column(default=5000)  # Free: 5K, Pro: 50K, Team: unlimited
     status: Mapped[str] = mapped_column(Text, default="active")
     current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Team tier fields
+    team_id: Mapped[str | None] = mapped_column(Text, nullable=True, index=True)
+    seats_included: Mapped[int] = mapped_column(default=1)  # Team tier includes 5 seats
+    seats_used: Mapped[int] = mapped_column(default=1)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -329,3 +352,59 @@ class PasswordResetToken(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# =============================================================================
+# Team Models (for Team tier collaboration)
+# =============================================================================
+
+
+class TeamModel(Base):
+    """Teams for shared memory collaboration."""
+
+    __tablename__ = "teams"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class TeamMemberModel(Base):
+    """Team membership with roles."""
+
+    __tablename__ = "team_members"
+
+    team_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[str] = mapped_column(Text, primary_key=True, index=True)
+    role: Mapped[str] = mapped_column(
+        Text, nullable=False, default="member"
+    )  # owner, admin, member
+    invited_by: Mapped[str | None] = mapped_column(Text)
+    joined_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class TeamInvitationModel(Base):
+    """Pending team invitations."""
+
+    __tablename__ = "team_invitations"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    team_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    email: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    role: Mapped[str] = mapped_column(Text, nullable=False, default="member")
+    invited_by: Mapped[str] = mapped_column(Text, nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

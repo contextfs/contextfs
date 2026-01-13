@@ -46,9 +46,53 @@ Always search contextfs memories FIRST before searching code directly:
 2. Only search code with Glob/Grep if memories don't have the answer
 3. The repo is self-indexed - semantic search can find code snippets
 
-## Database Changes
-- Core tables (memories, sessions): Use Alembic migrations in `src/contextfs/migrations/`
-- Index tables (index_status, indexed_files, indexed_commits): Managed by AutoIndexer._init_db() directly, no migration needed
+## Database Architecture
+
+### CRITICAL: PostgreSQL ONLY for Hosted Services
+**NEVER use SQLite for hosted/cloud services.** The sync service (`service/`) MUST use PostgreSQL exclusively.
+
+### SQLite vs PostgreSQL
+
+| Component | Database | Location | Purpose |
+|-----------|----------|----------|---------|
+| **Local CLI** | SQLite | `~/.contextfs/context.db` | Local memory storage, caching |
+| **Cloud Sync Service** | PostgreSQL | Docker/Cloud | Source of truth for all data |
+
+### What Lives Where
+
+**SQLite (Local Client - `src/contextfs/`):**
+- Local memories and sessions (user's machine)
+- Local ChromaDB embeddings
+- Memory edges (relationships)
+- Sync state (for tracking what's been synced)
+- Index status for auto-indexing
+
+**PostgreSQL (Cloud Service - `service/`):**
+- User accounts (source of truth)
+- API keys and authentication
+- Subscriptions and billing (Stripe integration)
+- Team management (teams, members, invitations)
+- Device registration and limits
+- Synced memories (cloud copies)
+- Usage tracking
+
+**NOT in SQLite:**
+- Users, API keys, subscriptions (PostgreSQL only)
+- Teams, team members, invitations (PostgreSQL only)
+- Devices (PostgreSQL only)
+
+### Database Migrations
+
+**Local Client (SQLite):**
+- Migrations in `src/contextfs/migrations/versions/` (001-007)
+- Core memory/session schema only
+- Run automatically on CLI startup
+
+**Cloud Service (PostgreSQL):**
+- SQL scripts in `migrations/` (sync-*.sql)
+- Models defined in `service/db/models.py`
+- Run via Docker or direct SQL execution
+- Includes: users, auth, subscriptions, teams, devices
 
 ## Documentation in Memory
 **When adding new features, always save to contextfs memory:**
