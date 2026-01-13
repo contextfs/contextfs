@@ -1,0 +1,17 @@
+# PostgreSQL with pgvector for ContextFS Sync
+FROM pgvector/pgvector:pg16
+
+# Copy initialization script
+COPY migrations/sync-init.sql /docker-entrypoint-initdb.d/init.sql
+
+# Set default environment variables
+ENV POSTGRES_USER=contextfs
+ENV POSTGRES_PASSWORD=contextfs
+ENV POSTGRES_DB=contextfs
+
+# Expose default PostgreSQL port
+EXPOSE 5432
+
+# Health check
+HEALTHCHECK --interval=10s --timeout=5s --retries=5 \
+    CMD pg_isready -U contextfs -d contextfs || exit 1

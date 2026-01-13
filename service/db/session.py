@@ -78,6 +78,17 @@ async def create_tables() -> None:
         await init_db()
 
     async with _engine.begin() as conn:
+        # Enable required PostgreSQL extensions
+        await conn.execute(
+            __import__("sqlalchemy").text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";')
+        )
+        await conn.execute(
+            __import__("sqlalchemy").text('CREATE EXTENSION IF NOT EXISTS "pg_trgm";')
+        )
+        await conn.execute(
+            __import__("sqlalchemy").text('CREATE EXTENSION IF NOT EXISTS "vector";')
+        )
+        # Create tables
         await conn.run_sync(Base.metadata.create_all)
 
 

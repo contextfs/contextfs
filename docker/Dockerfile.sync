@@ -35,12 +35,13 @@ COPY service /app/service
 # Set Python path
 ENV PYTHONPATH=/app/src:/app
 
-# Expose port
+# Default port (Railway overrides with $PORT)
+ENV PORT=8766
 EXPOSE 8766
 
-# Health check
+# Health check uses $PORT
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8766/health').raise_for_status()"
+    CMD python -c "import httpx; import os; httpx.get(f'http://localhost:{os.environ.get(\"PORT\", 8766)}/health').raise_for_status()"
 
-# Run the service
-CMD ["uvicorn", "service.api.main:app", "--host", "0.0.0.0", "--port", "8766"]
+# Run the service - Railway provides $PORT
+CMD uvicorn service.api.main:app --host 0.0.0.0 --port ${PORT:-8766}

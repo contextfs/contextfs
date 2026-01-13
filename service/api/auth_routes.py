@@ -3,13 +3,15 @@
 Handles user registration, API key management, and OAuth callbacks.
 """
 
+import hashlib
 import os
 from uuid import uuid4
 
+import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from contextfs.auth import APIKey, APIKeyService, User, require_auth
+from contextfs.auth import APIKey, APIKeyService, User, generate_api_key, hash_api_key, require_auth
 from contextfs.encryption import derive_encryption_key_base64
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -78,7 +80,30 @@ class OAuthInitResponse(BaseModel):
     """Response with OAuth authorization URL."""
 
     auth_url: str
-    state: str
+
+
+class LoginRequest(BaseModel):
+    """Request for email/password login."""
+
+    email: str
+    password: str
+
+
+class LoginUserResponse(BaseModel):
+    """User info in login response."""
+
+    id: str
+    email: str
+    name: str | None
+    emailVerified: bool = True
+    createdAt: str | None = None
+
+
+class LoginResponse(BaseModel):
+    """Response with API key after successful login."""
+
+    user: LoginUserResponse
+    apiKey: str
 
 
 class OAuthCallbackRequest(BaseModel):
@@ -102,6 +127,86 @@ def get_api_key_service() -> APIKeyService:
     """Get APIKeyService instance."""
     db_path = os.environ.get("CONTEXTFS_DB_PATH", "contextfs.db")
     return APIKeyService(db_path)
+
+
+def _hash_password(password: str) -> str:
+    """Hash password with SHA-256."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+@router.post("/login", response_model=LoginResponse)
+async def login(request: LoginRequest):
+    """Login with email and password, returns an API key."""
+    db_path = os.environ.get("CONTEXTFS_DB_PATH", "contextfs.db")
+    password_hash = _hash_password(request.password)
+
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+
+        # Find user by email and password
+        cursor = await db.execute(
+            """
+            SELECT id, email, name, provider FROM users
+            WHERE email = ? AND password_hash = ?
+            """,
+            (request.email, password_hash),
+        )
+        user = await cursor.fetchone()
+
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
+            )
+
+        # Check for existing active API key (prefer non-session keys)
+        cursor = await db.execute(
+            """
+            SELECT id, key_hash, key_prefix, name FROM api_keys
+            WHERE user_id = ? AND is_active = 1
+            ORDER BY CASE WHEN name = 'Login Session' THEN 1 ELSE 0 END, created_at DESC
+            LIMIT 1
+            """,
+            (user["id"],),
+        )
+        existing_key = await cursor.fetchone()
+
+        if existing_key:
+            # Return existing key - but we can't retrieve the original key from hash
+            # So we generate a new session key only if no keys exist
+            # For login, we need to return a usable key, so create session key
+            pass
+
+        # Generate a new API key for this login session
+        full_key, key_prefix = generate_api_key()
+        key_hash = hash_api_key(full_key)
+        key_id = str(uuid4())
+
+        # Delete old login session keys for this user (keep only latest)
+        await db.execute(
+            """
+            DELETE FROM api_keys
+            WHERE user_id = ? AND name = 'Login Session'
+            """,
+            (user["id"],),
+        )
+
+        await db.execute(
+            """
+            INSERT INTO api_keys (id, user_id, name, key_hash, key_prefix, is_active, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, datetime('now'))
+            """,
+            (key_id, user["id"], "Login Session", key_hash, key_prefix),
+        )
+        await db.commit()
+
+        return LoginResponse(
+            user=LoginUserResponse(
+                id=user["id"],
+                email=user["email"],
+                name=user["name"],
+            ),
+            apiKey=full_key,
+        )
 
 
 @router.get("/me", response_model=UserResponse)
@@ -187,6 +292,7 @@ async def list_api_keys(
                 last_used_at=key.last_used_at.isoformat() if key.last_used_at else None,
             )
             for key in keys
+            if key.name != "Login Session"  # Hide session keys from list
         ]
     )
 
