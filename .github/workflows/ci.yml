@@ -239,3 +239,66 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_PROJECT_ID: bca91012-934d-4d49-a0b5-945764682888
           RAILWAY_ENVIRONMENT_ID: a8c658f3-83c3-40aa-91f4-2a10941226cb
+
+  notify:
+    name: Slack Notification
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, test, test-rag, coverage, migration-check, build]
+    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request')
+    steps:
+      - name: Determine status
+        id: status
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "emoji=:x:" >> $GITHUB_OUTPUT
+            echo "color=#dc2626" >> $GITHUB_OUTPUT
+          elif [[ "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "status=cancelled" >> $GITHUB_OUTPUT
+            echo "emoji=:warning:" >> $GITHUB_OUTPUT
+            echo "color=#f59e0b" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "emoji=:white_check_mark:" >> $GITHUB_OUTPUT
+            echo "color=#16a34a" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Slack notification
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{
+              \"attachments\": [{
+                \"color\": \"${{ steps.status.outputs.color }}\",
+                \"blocks\": [
+                  {
+                    \"type\": \"section\",
+                    \"text\": {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"${{ steps.status.outputs.emoji }} *contextfs* CI ${{ steps.status.outputs.status }}\"
+                    }
+                  },
+                  {
+                    \"type\": \"context\",
+                    \"elements\": [
+                      {
+                        \"type\": \"mrkdwn\",
+                        \"text\": \"*Branch:* \`${{ github.ref_name }}\` | *Commit:* <${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}|\`${{ github.sha }}\`>\"
+                      }
+                    ]
+                  },
+                  {
+                    \"type\": \"context\",
+                    \"elements\": [
+                      {
+                        \"type\": \"mrkdwn\",
+                        \"text\": \"<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow run>\"
+                      }
+                    ]
+                  }
+                ]
+              }]
+            }" \
+            $SLACK_WEBHOOK_URL
