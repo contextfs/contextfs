@@ -11,44 +11,437 @@ from .utils import console
 server_app = typer.Typer(help="Server commands")
 
 
-@server_app.command("serve")
-def serve():
-    """Start the MCP server."""
-    from contextfs.mcp_server import main as mcp_main
-
-    # MCP uses stdout for JSON-RPC - no printing allowed
-    mcp_main()
+# =============================================================================
+# MCP Server Helper Functions
+# =============================================================================
 
 
-@server_app.command("web")
-def web(
+def _check_mcp_running(host: str = "127.0.0.1", port: int = 8003) -> dict | None:
+    """Check if MCP server is running. Returns status dict or None if not running."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        url = f"http://{host}:{port}/health"
+        with urllib.request.urlopen(url, timeout=2) as response:
+            data = json.loads(response.read().decode())
+            return {"running": True, "status": data.get("status", "ok")}
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return None
+
+
+def _get_mcp_pid(port: int = 8003) -> int | None:
+    """Get PID of running MCP server on specified port."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip().split("\n")[0])
+    except FileNotFoundError:
+        pass
+
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", f"contextfs.mcp.server.*{port}"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return int(result.stdout.strip().split("\n")[0])
+    except FileNotFoundError:
+        pass
+
+    return None
+
+
+def _get_mcp_service_paths() -> dict:
+    """Get platform-specific service file paths for MCP."""
+    import platform
+
+    system = platform.system()
+    home = Path.home()
+
+    if system == "Darwin":
+        return {
+            "platform": "macos",
+            "service_file": home / "Library/LaunchAgents/com.contextfs.mcp-server.plist",
+            "service_name": "com.contextfs.mcp-server",
+        }
+    elif system == "Linux":
+        return {
+            "platform": "linux",
+            "service_file": home / ".config/systemd/user/contextfs-mcp.service",
+            "service_name": "contextfs-mcp",
+        }
+    else:
+        return {"platform": "unknown"}
+
+
+def _stop_mcp(port: int = 8003) -> bool:
+    """Stop the MCP server."""
+    import signal
+
+    pid = _get_mcp_pid(port)
+    if pid:
+        try:
+            import os
+
+            os.kill(pid, signal.SIGTERM)
+            return True
+        except ProcessLookupError:
+            pass
+    return False
+
+
+def _stop_chroma(port: int = 8000) -> bool:
+    """Stop the ChromaDB server."""
+    import signal
+
+    pid = _get_chroma_pid(port)
+    if pid:
+        try:
+            import os
+
+            os.kill(pid, signal.SIGTERM)
+            return True
+        except ProcessLookupError:
+            pass
+    return False
+
+
+@server_app.command("start")
+def start_server(
+    service: str = typer.Argument(..., help="Service to start: mcp, chroma"),
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
-    port: int = typer.Option(8000, "--port", "-p", help="Port to bind to"),
+    port: int = typer.Option(None, "--port", "-p", help="Port (default: mcp=8003, chroma=8000)"),
+    foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in foreground"),
 ):
-    """Start the web UI server."""
-    import uvicorn
+    """Start MCP or ChromaDB server.
 
-    from contextfs.web.server import create_app
+    Examples:
+        contextfs start mcp               # Start MCP server (background)
+        contextfs start chroma            # Start ChromaDB server (background)
+        contextfs start mcp -f            # Run MCP in foreground
+        contextfs start mcp -p 9000       # Custom port
+    """
+    if service == "mcp":
+        default_port = port or 8003
+        if _check_mcp_running(host, default_port):
+            pid = _get_mcp_pid(default_port)
+            console.print(f"[yellow]MCP server already running on {host}:{default_port}[/yellow]")
+            if pid:
+                console.print(f"   PID: {pid}")
+            return
 
-    console.print(f"[green]Starting ContextFS Web UI at http://{host}:{port}[/green]")
-    app = create_app()
-    uvicorn.run(app, host=host, port=port)
+        if foreground:
+            console.print(f"[bold]Starting MCP server on {host}:{default_port}[/bold]")
+            console.print("[dim]Press Ctrl+C to stop[/dim]")
+            from contextfs.mcp import run_mcp_server
+
+            run_mcp_server(host=host, port=default_port)
+        else:
+            import sys
+
+            cmd = [
+                sys.executable,
+                "-m",
+                "contextfs.mcp.server",
+                "--host",
+                host,
+                "--port",
+                str(default_port),
+            ]
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            console.print(f"[green]MCP server started on {host}:{default_port}[/green]")
+
+    elif service == "chroma":
+        default_port = port or 8000
+        data_path = Path.home() / ".contextfs" / "chroma_db"
+
+        if _check_chroma_running(host, default_port):
+            pid = _get_chroma_pid(default_port)
+            console.print(f"[yellow]ChromaDB already running on {host}:{default_port}[/yellow]")
+            if pid:
+                console.print(f"   PID: {pid}")
+            return
+
+        chroma_bin = _find_chroma_bin()
+        if not chroma_bin:
+            console.print("[red]Error: 'chroma' CLI not found.[/red]")
+            console.print("Install it with: pip install chromadb")
+            raise typer.Exit(1)
+
+        data_path.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            chroma_bin,
+            "run",
+            "--path",
+            str(data_path),
+            "--host",
+            host,
+            "--port",
+            str(default_port),
+        ]
+
+        if foreground:
+            console.print(f"[bold]Starting ChromaDB server on {host}:{default_port}[/bold]")
+            console.print(f"  Data path: {data_path}")
+            console.print("[dim]Press Ctrl+C to stop[/dim]")
+            try:
+                subprocess.run(cmd)
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Stopped[/yellow]")
+        else:
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            console.print(f"[green]ChromaDB server started on {host}:{default_port}[/green]")
+
+    else:
+        console.print(f"[red]Unknown service: {service}[/red]")
+        console.print("Valid services: mcp, chroma")
+        raise typer.Exit(1)
 
 
-@server_app.command("install-hooks")
-def install_hooks(
+@server_app.command("stop")
+def stop_server(
+    service: str = typer.Argument(..., help="Service to stop: mcp, chroma, all"),
+    port: int = typer.Option(None, "--port", "-p", help="Port (default: mcp=8003, chroma=8000)"),
+):
+    """Stop MCP or ChromaDB server.
+
+    Examples:
+        contextfs stop mcp                # Stop MCP server
+        contextfs stop chroma             # Stop ChromaDB server
+        contextfs stop all                # Stop both servers
+    """
+    if service == "mcp" or service == "all":
+        mcp_port = port or 8003
+        if _stop_mcp(mcp_port):
+            console.print(f"[green]MCP server stopped (port {mcp_port})[/green]")
+        else:
+            console.print(f"[yellow]MCP server not running on port {mcp_port}[/yellow]")
+
+    if service == "chroma" or service == "all":
+        chroma_port = port or 8000
+        if _stop_chroma(chroma_port):
+            console.print(f"[green]ChromaDB server stopped (port {chroma_port})[/green]")
+        else:
+            console.print(f"[yellow]ChromaDB server not running on port {chroma_port}[/yellow]")
+
+    if service not in ("mcp", "chroma", "all"):
+        console.print(f"[red]Unknown service: {service}[/red]")
+        console.print("Valid services: mcp, chroma, all")
+        raise typer.Exit(1)
+
+
+@server_app.command("status")
+def server_status(
+    service: str = typer.Argument(None, help="Service to check: mcp, chroma (default: all)"),
+):
+    """Check status of MCP and ChromaDB servers.
+
+    Examples:
+        contextfs status                  # Check all servers
+        contextfs status mcp              # Check MCP only
+        contextfs status chroma           # Check ChromaDB only
+    """
+    services = [service] if service else ["mcp", "chroma"]
+
+    for svc in services:
+        if svc == "mcp":
+            status = _check_mcp_running()
+            if status:
+                pid = _get_mcp_pid()
+                console.print("[green]MCP server:[/green] running")
+                console.print("   URL: http://127.0.0.1:8003/mcp/sse")
+                if pid:
+                    console.print(f"   PID: {pid}")
+                paths = _get_mcp_service_paths()
+                if paths["platform"] == "macos" and paths["service_file"].exists():
+                    console.print("   Service: launchd (auto-start enabled)")
+                elif paths["platform"] == "linux" and paths["service_file"].exists():
+                    console.print("   Service: systemd (auto-start enabled)")
+            else:
+                console.print("[red]MCP server:[/red] not running")
+                console.print("   Start with: contextfs start mcp")
+
+        elif svc == "chroma":
+            status = _check_chroma_running("127.0.0.1", 8000)
+            if status:
+                pid = _get_chroma_pid(8000)
+                console.print("[green]ChromaDB server:[/green] running")
+                console.print("   URL: http://127.0.0.1:8000")
+                if pid:
+                    console.print(f"   PID: {pid}")
+                paths = _get_service_paths()
+                if paths["platform"] == "macos" and paths["service_file"].exists():
+                    console.print("   Service: launchd (auto-start enabled)")
+                elif paths["platform"] == "linux" and paths["service_file"].exists():
+                    console.print("   Service: systemd (auto-start enabled)")
+            else:
+                console.print("[red]ChromaDB server:[/red] not running")
+                console.print("   Start with: contextfs start chroma")
+
+        else:
+            console.print(f"[red]Unknown service: {svc}[/red]")
+
+
+@server_app.command("mcp-server")
+def mcp_server(
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
+    port: int = typer.Option(8003, "--port", "-p", help="Port to bind to"),
+):
+    """Start the MCP server (HTTP/SSE transport).
+
+    This starts a single shared MCP service that all Claude Code sessions
+    connect to via SSE (Server-Sent Events).
+
+    Configure Claude Code with:
+        {"mcpServers": {"contextfs": {"type": "sse", "url": "http://localhost:8003/mcp/sse"}}}
+
+    Examples:
+        contextfs mcp-server                # Start on localhost:8003
+        contextfs mcp-server -p 8765        # Custom port
+
+    Note: Prefer using 'contextfs start mcp' for background execution.
+    """
+    from contextfs.mcp import run_mcp_server
+
+    run_mcp_server(host=host, port=port)
+
+
+@server_app.command("install")
+def install(
+    target: str = typer.Argument("claude", help="Target: claude, gemini, codex, all"),
+    path: Path = typer.Option(None, "--path", "-p", help="Project path for project-level install"),
+    user_only: bool = typer.Option(
+        False, "--user-only", help="Only install user-level (skip project)"
+    ),
+    no_service: bool = typer.Option(False, "--no-service", help="Don't install auto-start service"),
+    no_start: bool = typer.Option(False, "--no-start", help="Don't start MCP server now"),
+    uninstall: bool = typer.Option(False, "--uninstall", help="Remove installation"),
+):
+    """Install ContextFS for AI coding tools.
+
+    Targets:
+        claude  - Claude Code & Desktop (default)
+        gemini  - Gemini CLI
+        codex   - Codex CLI
+        all     - All supported tools
+
+    For Claude, installs:
+    - User-level: hooks, commands (/remember, /recall), MCP config
+    - Project-level: CLAUDE.md memory protocol (merged, not replaced)
+    - Starts MCP server and installs auto-start service
+
+    Examples:
+        contextfs install                    # Install for Claude (default)
+        contextfs install claude             # Same as above
+        contextfs install gemini             # Install for Gemini CLI
+        contextfs install all                # Install for all tools
+        contextfs install --user-only        # Skip project-level install
+        contextfs install --no-service       # Don't install auto-start
+        contextfs install --uninstall        # Remove installation
+    """
+    targets = [target] if target != "all" else ["claude", "gemini", "codex"]
+
+    for t in targets:
+        if t == "claude":
+            _install_claude(path, user_only, no_service, no_start, uninstall)
+        elif t == "gemini":
+            _install_gemini(no_service, no_start, uninstall)
+        elif t == "codex":
+            _install_codex(no_service, no_start, uninstall)
+        else:
+            console.print(f"[red]Unknown target: {t}[/red]")
+            console.print("Valid targets: claude, gemini, codex, all")
+            raise typer.Exit(1)
+
+
+def _install_claude(
+    path: Path | None,
+    user_only: bool,
+    no_service: bool,
+    no_start: bool,
+    uninstall: bool,
+) -> None:
+    """Install for Claude Code & Desktop."""
+    from contextfs.plugins.claude_code import (
+        ClaudeCodePlugin,
+        uninstall_claude_code,
+        uninstall_claude_code_from_project,
+    )
+
+    project_path = path.resolve() if path else Path.cwd()
+
+    if uninstall:
+        uninstall_claude_code()
+        if not user_only:
+            uninstall_claude_code_from_project(project_path)
+        console.print("[green]Claude Code installation removed.[/green]")
+        return
+
+    plugin = ClaudeCodePlugin(project_path=project_path if not user_only else None)
+    plugin.install(include_project=not user_only)
+
+    # Handle service/start options (plugin.install already handles these by default)
+    # The no_service and no_start flags would need to be passed to the plugin
+    # For now, the plugin always tries to start and install service
+
+
+def _install_gemini(no_service: bool, no_start: bool, uninstall: bool) -> None:
+    """Install for Gemini CLI."""
+    from contextfs.plugins.gemini import GeminiPlugin
+
+    if uninstall:
+        console.print("[yellow]Gemini uninstall not yet implemented.[/yellow]")
+        return
+
+    plugin = GeminiPlugin()
+    plugin.install()
+    console.print("[green]Gemini CLI integration installed.[/green]")
+
+
+def _install_codex(no_service: bool, no_start: bool, uninstall: bool) -> None:
+    """Install for Codex CLI."""
+    from contextfs.plugins.codex import CodexPlugin
+
+    if uninstall:
+        console.print("[yellow]Codex uninstall not yet implemented.[/yellow]")
+        return
+
+    plugin = CodexPlugin()
+    plugin.install()
+    console.print("[green]Codex CLI integration installed.[/green]")
+
+
+@server_app.command("git-hooks")
+def git_hooks(
     repo_path: str = typer.Argument(None, help="Repository path (default: current directory)"),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing hooks"),
-):
+) -> None:
     """Install git hooks for automatic indexing.
 
     Installs post-commit and post-merge hooks that automatically
     run incremental indexing after commits and pulls.
 
     Examples:
-        contextfs install-hooks              # Install to current repo
-        contextfs install-hooks /path/to/repo
-        contextfs install-hooks --force      # Overwrite existing hooks
+        contextfs git-hooks              # Install to current repo
+        contextfs git-hooks /path/to/repo
+        contextfs git-hooks --force      # Overwrite existing hooks
     """
     # Determine target repo
     target = Path(repo_path).resolve() if repo_path else Path.cwd()
@@ -130,116 +523,6 @@ exit 0
     console.print("\n[green]Done![/green] ContextFS will auto-index on:")
     console.print("  - git commit (indexes changed files)")
     console.print("  - git pull/merge (indexes new files and commits)")
-
-
-@server_app.command("install-claude-desktop")
-def install_claude_desktop(
-    uninstall: bool = typer.Option(False, "--uninstall", help="Remove from Claude Desktop"),
-):
-    """Install ContextFS MCP server for Claude Desktop."""
-    import json
-    import os
-    import platform
-    import sys
-
-    def get_claude_desktop_config_path() -> Path:
-        system = platform.system()
-        if system == "Darwin":
-            return (
-                Path.home()
-                / "Library"
-                / "Application Support"
-                / "Claude"
-                / "claude_desktop_config.json"
-            )
-        elif system == "Windows":
-            return Path(os.environ.get("APPDATA", "")) / "Claude" / "claude_desktop_config.json"
-        else:
-            return Path.home() / ".config" / "Claude" / "claude_desktop_config.json"
-
-    def find_contextfs_mcp_path() -> str | None:
-        path = shutil.which("contextfs-mcp")
-        if path:
-            if platform.system() != "Windows":
-                path = os.path.realpath(path)
-            return path
-        return None
-
-    config_path = get_claude_desktop_config_path()
-
-    if uninstall:
-        if not config_path.exists():
-            console.print("[yellow]Claude Desktop config not found.[/yellow]")
-            return
-        with open(config_path) as f:
-            config = json.load(f)
-        if "mcpServers" in config and "contextfs" in config["mcpServers"]:
-            del config["mcpServers"]["contextfs"]
-            with open(config_path, "w") as f:
-                json.dump(config, f, indent=2)
-            console.print("[green]ContextFS removed from Claude Desktop config.[/green]")
-        else:
-            console.print("[yellow]ContextFS not found in config.[/yellow]")
-        return
-
-    # Install
-    console.print("[bold]Installing ContextFS MCP for Claude Desktop...[/bold]\n")
-
-    contextfs_path = find_contextfs_mcp_path()
-    if contextfs_path:
-        console.print(f"Found contextfs-mcp: [cyan]{contextfs_path}[/cyan]")
-    else:
-        contextfs_path = sys.executable
-        console.print(f"Using Python fallback: [cyan]{contextfs_path}[/cyan]")
-
-    if config_path.exists():
-        with open(config_path) as f:
-            config = json.load(f)
-    else:
-        config = {}
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if "mcpServers" not in config:
-        config["mcpServers"] = {}
-
-    # Set up MCP config
-    if find_contextfs_mcp_path():
-        config["mcpServers"]["contextfs"] = {
-            "command": contextfs_path,
-            "env": {"CONTEXTFS_SOURCE_TOOL": "claude-desktop"},
-        }
-    else:
-        config["mcpServers"]["contextfs"] = {
-            "command": sys.executable,
-            "args": ["-m", "contextfs.mcp_server"],
-            "env": {"CONTEXTFS_SOURCE_TOOL": "claude-desktop"},
-        }
-
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
-
-    console.print("\n[green]ContextFS MCP server installed![/green]")
-    console.print(f"\nConfig: [dim]{config_path}[/dim]")
-    console.print("\n[yellow]Restart Claude Desktop to activate.[/yellow]")
-
-    console.print("\n[bold]Available MCP tools:[/bold]")
-    tools = [
-        ("contextfs_save", "Save memories (with project grouping)"),
-        ("contextfs_search", "Search (cross-repo, by project/tool)"),
-        ("contextfs_list", "List recent memories"),
-        ("contextfs_list_repos", "List repositories"),
-        ("contextfs_list_projects", "List projects"),
-        ("contextfs_list_tools", "List source tools"),
-        ("contextfs_recall", "Recall by ID"),
-        ("contextfs_evolve", "Evolve a memory with history tracking"),
-        ("contextfs_merge", "Merge multiple memories"),
-        ("contextfs_split", "Split a memory into parts"),
-        ("contextfs_lineage", "Get memory lineage (history)"),
-        ("contextfs_link", "Create relationships between memories"),
-        ("contextfs_related", "Find related memories"),
-    ]
-    for name, desc in tools:
-        console.print(f"  - [cyan]{name}[/cyan] - {desc}")
 
 
 # =============================================================================

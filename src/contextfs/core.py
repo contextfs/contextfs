@@ -815,6 +815,9 @@ class ContextFS:
         # Add to RAG index
         self.rag.add_memory(memory)
 
+        # Auto-link to related memories
+        self._auto_link_references(memory)
+
         return memory
 
     def save_batch(
@@ -1834,6 +1837,140 @@ class ContextFS:
     def has_graph(self) -> bool:
         """Check if graph backend is available for advanced lineage operations."""
         return self._graph is not None or self._storage.has_graph()
+
+    # ==================== Auto-Linking ====================
+
+    def _auto_link_references(self, memory: Memory) -> list[dict[str, Any]]:
+        """
+        Automatically detect and create links from a saved memory.
+
+        Uses semantic similarity to find related memories and creates
+        RELATED_TO links automatically. Also detects explicit memory ID
+        references in content.
+
+        Args:
+            memory: The newly saved memory to auto-link
+
+        Returns:
+            List of created links with id, relation, and method
+        """
+        import re
+
+        if not self.config.auto_link_enabled:
+            return []
+
+        linked: list[dict[str, Any]] = []
+        linked_ids: set[str] = set()
+
+        # 1. Semantic similarity search (primary method)
+        try:
+            # Search for similar memories using content
+            search_text = memory.summary or memory.content[:500]
+            results = self.search(
+                search_text,
+                limit=self.config.auto_link_max + 2,  # Extra to filter self
+                cross_repo=False,  # Stay within same namespace
+            )
+
+            for r in results:
+                # Skip self
+                if r.memory.id == memory.id:
+                    continue
+                # Check threshold
+                if r.score < self.config.auto_link_threshold:
+                    continue
+                # Limit links
+                if len(linked) >= self.config.auto_link_max:
+                    break
+
+                # Create link
+                self.link(
+                    from_memory_id=memory.id,
+                    to_memory_id=r.memory.id,
+                    relation=EdgeRelation.RELATED_TO,
+                )
+                linked.append(
+                    {
+                        "id": r.memory.id,
+                        "relation": "related_to",
+                        "score": r.score,
+                        "method": "semantic",
+                    }
+                )
+                linked_ids.add(r.memory.id)
+
+        except Exception as e:
+            logger.debug(f"Semantic auto-link failed: {e}")
+
+        # 2. Explicit memory ID detection (secondary method)
+        id_pattern = r"\b([a-f0-9]{8,})\b"
+        matches = re.findall(id_pattern, memory.content.lower())
+
+        for potential_id in set(matches):
+            # Skip self-reference
+            if memory.id.lower().startswith(potential_id):
+                continue
+            # Skip already linked
+            if any(lid.lower().startswith(potential_id) for lid in linked_ids):
+                continue
+
+            # Verify memory exists
+            target = self.recall(potential_id)
+            if target and target.id not in linked_ids:
+                # Detect relation type from context
+                relation = self._detect_relation_type(memory.content, potential_id)
+                self.link(
+                    from_memory_id=memory.id,
+                    to_memory_id=target.id,
+                    relation=relation,
+                )
+                linked.append(
+                    {
+                        "id": target.id,
+                        "relation": relation.value,
+                        "method": "id_reference",
+                    }
+                )
+                linked_ids.add(target.id)
+
+        return linked
+
+    def _detect_relation_type(self, content: str, memory_id: str) -> EdgeRelation:
+        """
+        Detect relation type from keywords near a memory ID reference.
+
+        Args:
+            content: Full content text
+            memory_id: The memory ID found in content
+
+        Returns:
+            Appropriate EdgeRelation based on surrounding context
+        """
+        content_lower = content.lower()
+        idx = content_lower.find(memory_id[:8].lower())
+        if idx == -1:
+            return EdgeRelation.REFERENCES
+
+        # Get context before the memory ID (50 chars)
+        context = content_lower[max(0, idx - 50) : idx]
+
+        # Keyword to relation mapping
+        keyword_relations = {
+            ("fix", "fixed", "fixes", "resolved", "resolves"): EdgeRelation.SUPERSEDES,
+            ("supersede", "supersedes", "update", "updates", "replace"): EdgeRelation.SUPERSEDES,
+            ("related", "see also", "similar", "like"): EdgeRelation.RELATED_TO,
+            ("depend", "depends", "requires", "needs", "require"): EdgeRelation.DEPENDS_ON,
+            ("contradict", "conflicts", "conflict", "disagree"): EdgeRelation.CONTRADICTS,
+            ("implement", "implements", "implementation"): EdgeRelation.IMPLEMENTS,
+            ("part of", "belongs to", "component"): EdgeRelation.PART_OF,
+            ("caused by", "because of", "due to"): EdgeRelation.CAUSED_BY,
+        }
+
+        for keywords, relation in keyword_relations.items():
+            if any(kw in context for kw in keywords):
+                return relation
+
+        return EdgeRelation.REFERENCES
 
     # ==================== Session Operations ====================
 

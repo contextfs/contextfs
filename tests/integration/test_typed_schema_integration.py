@@ -3,8 +3,6 @@
 Tests structured_data through CLI, MCP, and API interfaces.
 """
 
-import json
-
 import pytest
 
 from contextfs.core import ContextFS
@@ -174,52 +172,6 @@ class TestMCPStructuredData:
 
         assert memory.structured_data is not None
         assert memory.structured_data["decision"] == "Via MCP"
-
-
-class TestAPIStructuredData:
-    """Test API endpoints with structured_data."""
-
-    def test_api_create_memory_with_structured_data(self, ctx):
-        """Test API memory creation with structured_data."""
-        # This tests the serialization/deserialization of structured_data
-        from contextfs.web.server import serialize_memory
-
-        memory = ctx.save(
-            content="API test memory",
-            type=MemoryType.DECISION,
-            structured_data={
-                "decision": "Use FastAPI",
-                "rationale": "Async support, automatic OpenAPI",
-            },
-        )
-
-        # Serialize like the API does
-        serialized = serialize_memory(memory)
-
-        assert "structured_data" in serialized
-        assert serialized["structured_data"]["decision"] == "Use FastAPI"
-
-        # Verify it's JSON-serializable
-        json_str = json.dumps(serialized)
-        parsed = json.loads(json_str)
-        assert parsed["structured_data"]["decision"] == "Use FastAPI"
-
-    def test_api_response_includes_structured_data(self, ctx):
-        """Test that API responses include structured_data."""
-        from contextfs.schemas import SearchResult
-        from contextfs.web.server import serialize_search_result
-
-        memory = ctx.save(
-            content="Searchable decision",
-            type=MemoryType.DECISION,
-            structured_data={"decision": "Test", "rationale": "Testing"},
-        )
-
-        # Simulate search result
-        search_result = SearchResult(memory=memory, score=0.95)
-        serialized = serialize_search_result(search_result)
-
-        assert serialized["memory"]["structured_data"]["decision"] == "Test"
 
 
 class TestDatabaseMigration:

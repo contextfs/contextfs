@@ -90,6 +90,9 @@ class Config(BaseSettings):
     lineage_auto_track: bool = True  # Auto-track evolution on updates
     lineage_merge_strategy: MergeStrategyType = MergeStrategyType.UNION
     lineage_preserve_tags: bool = True  # Preserve tags when evolving
+    auto_link_enabled: bool = True  # Auto-link memories based on semantic similarity
+    auto_link_threshold: float = 0.55  # Minimum similarity score to auto-link (0.0-1.0)
+    auto_link_max: int = 3  # Maximum auto-links per memory save
 
     # =================================================================
     # Search Settings

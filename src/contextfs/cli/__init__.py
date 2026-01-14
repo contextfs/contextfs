@@ -8,7 +8,6 @@ from .cloud import cloud_app
 from .index import index_app
 from .memory import memory_app
 from .server import server_app
-from .sync import sync_app
 from .utils import console, get_ctx
 
 
@@ -54,7 +53,6 @@ for command in server_app.registered_commands:
     app.command(command.name)(command.callback)
 
 # Register subcommand groups
-app.add_typer(sync_app, name="sync")
 app.add_typer(cloud_app, name="cloud")
 
 __all__ = ["app", "console", "get_ctx"]

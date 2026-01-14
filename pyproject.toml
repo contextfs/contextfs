@@ -42,6 +42,7 @@ dependencies = [
     # Web/API
     "fastapi>=0.115.0",
     "uvicorn>=0.32.0",
+    "sse-starlette>=2.0.0",
 
     # CLI
     "typer>=0.15.0",
@@ -113,7 +114,6 @@ docs = [
 [project.scripts]
 contextfs = "contextfs.cli:app"
 ctx = "contextfs.cli:app"
-contextfs-mcp = "contextfs.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/MagnetonIO/contextfs"
