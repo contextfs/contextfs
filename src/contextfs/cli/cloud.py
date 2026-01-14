@@ -152,6 +152,8 @@ def _login_email(cloud_config: dict, server_url: str, email: str | None, passwor
             cloud_config["enabled"] = True
             if encryption_key:
                 cloud_config["encryption_key"] = encryption_key
+            else:
+                cloud_config.pop("encryption_key", None)  # Remove if E2EE disabled
             _save_cloud_config(cloud_config)
 
             console.print(

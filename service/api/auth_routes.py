@@ -281,12 +281,13 @@ async def login(
         )
     )
 
-    # Create new session key with E2EE encryption
+    # Create new session key (E2EE controlled by env var)
+    e2ee_enabled = os.environ.get("CONTEXTFS_E2EE_ENABLED", "false").lower() == "true"
     full_key, encryption_salt = await _create_api_key(
-        session, user.id, request.session_type, with_encryption=True
+        session, user.id, request.session_type, with_encryption=e2ee_enabled
     )
 
-    # Derive encryption key for client
+    # Derive encryption key for client if E2EE enabled
     encryption_key = None
     if encryption_salt:
         encryption_key = derive_encryption_key_base64(full_key, encryption_salt)
