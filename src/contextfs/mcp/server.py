@@ -949,8 +949,8 @@ def _handle_list_indexes(ctx: ContextFS) -> list[TextContent]:
         output.append(f"  Path: {idx.repo_path}")
         output.append(f"  Files: {idx.files_indexed}, Commits: {idx.commits_indexed}")
         output.append(f"  Memories: {idx.memories_created}")
-        if idx.last_indexed:
-            output.append(f"  Last indexed: {idx.last_indexed}")
+        if idx.indexed_at:
+            output.append(f"  Last indexed: {idx.indexed_at}")
 
     return [TextContent(type="text", text="\n".join(output))]
 

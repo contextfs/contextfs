@@ -784,3 +784,80 @@ def graph_status():
         console.print("  1. Set CONTEXTFS_BACKEND=sqlite+falkordb or postgres+falkordb")
         console.print("  2. Start FalkorDB: docker-compose up -d falkordb")
         console.print("  3. Restart contextfs")
+
+
+@memory_app.command("auto-recall")
+def auto_recall(
+    limit: int = typer.Option(5, "--limit", "-l", help="Max memories per type"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Minimal output for hooks"),
+):
+    """Auto-recall relevant context for current repo (for SessionStart hooks).
+
+    Searches for recent decisions, procedures, and errors for the current
+    repository and outputs them in a format Claude can use.
+
+    Example hook usage:
+        "command": "uvx contextfs memory auto-recall --quiet"
+    """
+    import subprocess
+
+    ctx = get_ctx()
+
+    # Detect current repo name
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            repo_path = Path(result.stdout.strip())
+            repo_name = repo_path.name
+        else:
+            repo_name = Path.cwd().name
+    except Exception:
+        repo_name = Path.cwd().name
+
+    # Search for relevant context by type
+    memory_types = [
+        ("decision", "Recent Decisions"),
+        ("procedural", "Procedures"),
+        ("error", "Known Errors & Solutions"),
+    ]
+
+    output_lines = []
+    output_lines.append(f"# ContextFS Auto-Recall: {repo_name}")
+    output_lines.append("")
+
+    has_content = False
+    for mem_type, header in memory_types:
+        memories = ctx.search(
+            query=repo_name,
+            limit=limit,
+            type=MemoryType(mem_type),
+        )
+
+        if memories:
+            has_content = True
+            output_lines.append(f"## {header}")
+            for result in memories:
+                mem = result.memory
+                summary = mem.summary or mem.content[:100]
+                output_lines.append(f"- [{mem.id[:8]}] {summary}")
+            output_lines.append("")
+
+    if not has_content:
+        output_lines.append("No relevant memories found for this repo.")
+        output_lines.append("Use contextfs_save to store decisions, procedures, and errors.")
+
+    output_lines.append("")
+    output_lines.append("---")
+    output_lines.append("Memory operations: search → save → evolve/link → delete")
+
+    # Output
+    if quiet:
+        # Minimal output for hooks
+        print("\n".join(output_lines))
+    else:
+        for line in output_lines:
+            console.print(line)
