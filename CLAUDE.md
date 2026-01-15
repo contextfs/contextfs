@@ -35,6 +35,23 @@ Always follow GitFlow for changes:
 4. Create PR to merge into main
 5. Never commit directly to main
 
+## Releasing New Versions (MANDATORY)
+**ALWAYS use the release script to create new versions:**
+
+```bash
+./scripts/release.sh <version>
+# Example: ./scripts/release.sh 0.2.15
+```
+
+The script handles:
+1. Version format validation (X.Y.Z)
+2. Checks for uncommitted changes
+3. Updates pyproject.toml and __init__.py
+4. Commits with proper message
+5. Creates git tag and pushes
+
+**NEVER manually edit version files or create tags.** Always use the script.
+
 ## Testing Requirements
 **Each feature must have a test. Tests must pass locally before committing.**
 
