@@ -268,6 +268,11 @@ You have access to ContextFS for persistent memory across sessions. Use these op
    - Use: `contextfs_save` with `type="procedural"` and **required** `steps[]`
    - Include files modified and key decisions in the steps or notes
 
+7. **Create or update research papers**
+   - Use: `contextfs_save` with `type="doc"`
+   - Save summary of paper, key concepts, and file location
+   - Example: `contextfs_save(type="doc", summary="Paper title", content="Overview and key concepts...", tags=["research", "topic"])`
+
 ### When to Search Memories
 
 **ALWAYS search FIRST when you:**
