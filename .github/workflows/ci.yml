@@ -231,10 +231,35 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Deploy to Railway
+      - name: Deploy to Railway with rollback
         run: |
           npm install -g @railway/cli
+
+          # Deploy new version
+          echo "Deploying new version..."
           railway redeploy --service sync-api-prod --yes
+
+          # Wait for deployment to start
+          sleep 30
+
+          # Health check with retries
+          echo "Checking deployment health..."
+          MAX_RETRIES=10
+          RETRY_DELAY=15
+          for i in $(seq 1 $MAX_RETRIES); do
+            HEALTH=$(curl -s -o /dev/null -w "%{http_code}" https://api.contextfs.ai/health || echo "000")
+            if [ "$HEALTH" = "200" ]; then
+              echo "Deployment healthy!"
+              exit 0
+            fi
+            echo "Health check attempt $i/$MAX_RETRIES failed (HTTP $HEALTH), waiting ${RETRY_DELAY}s..."
+            sleep $RETRY_DELAY
+          done
+
+          # Health check failed - rollback
+          echo "Deployment failed health checks! Rolling back..."
+          railway rollback --service sync-api-prod --yes || true
+          exit 1
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_PROJECT_ID: bca91012-934d-4d49-a0b5-945764682888
