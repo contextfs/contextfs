@@ -665,12 +665,16 @@ def save_session(
 
     transcript_path = transcript
     if not transcript_path and not sys.stdin.isatty():
-        try:
-            hook_input = json.load(sys.stdin)
-            if "transcript_path" in hook_input:
-                transcript_path = Path(hook_input["transcript_path"]).expanduser()
-        except Exception:
-            pass
+        # Check if there's actually data to read (non-blocking)
+        import select
+
+        if select.select([sys.stdin], [], [], 0.1)[0]:
+            try:
+                hook_input = json.load(sys.stdin)
+                if "transcript_path" in hook_input:
+                    transcript_path = Path(hook_input["transcript_path"]).expanduser()
+            except Exception:
+                pass
 
     session = ctx.get_current_session()
     if not session:
