@@ -1,5 +1,32 @@
 # ContextFS Development Guidelines
 
+## Configuration Rules (CRITICAL)
+**NEVER use static/hardcoded values for configuration. ALWAYS use environment variables.**
+
+All configuration values must be:
+1. Defined in `config.py` with the `CONTEXTFS_` prefix
+2. Configurable via environment variables
+3. Never hardcoded in application code
+
+Examples:
+```python
+# WRONG - hardcoded values
+chroma_port = 8000
+mcp_port = 8003
+
+# CORRECT - from config (loaded from env)
+from contextfs.config import get_config
+config = get_config()
+chroma_port = config.chroma_port  # CONTEXTFS_CHROMA_PORT
+mcp_port = config.mcp_port        # CONTEXTFS_MCP_PORT
+```
+
+Key environment variables:
+- `CONTEXTFS_CHROMA_HOST` - ChromaDB server host (default: localhost)
+- `CONTEXTFS_CHROMA_PORT` - ChromaDB server port (default: 8000)
+- `CONTEXTFS_MCP_PORT` - MCP server port (default: 8003)
+- `CONTEXTFS_DATA_DIR` - Data directory (default: ~/.contextfs)
+
 ## Git Workflow (GitFlow)
 Always follow GitFlow for changes:
 1. Create a new branch for changes (feature/*, bugfix/*, hotfix/*)

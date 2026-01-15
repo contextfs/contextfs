@@ -587,7 +587,8 @@ class StorageRouter(StorageBackend):
             full_id = row[0]
 
             cursor.execute("DELETE FROM memories WHERE id = ?", (full_id,))
-            cursor.execute("DELETE FROM memories_fts WHERE id = ?", (full_id,))
+            # FTS trigger (memories_ad) handles FTS deletion automatically
+            # DO NOT manually delete from memories_fts - causes index corruption
             conn.commit()
 
             return cursor.rowcount > 0
@@ -639,17 +640,17 @@ class StorageRouter(StorageBackend):
         cursor = conn.cursor()
 
         try:
-            # Get IDs to delete from FTS too
-            cursor.execute("SELECT id FROM memories WHERE namespace_id = ?", (namespace_id,))
-            ids = [row[0] for row in cursor.fetchall()]
+            # Count memories before deletion
+            cursor.execute("SELECT COUNT(*) FROM memories WHERE namespace_id = ?", (namespace_id,))
+            count = cursor.fetchone()[0]
 
-            if ids:
-                placeholders = ",".join("?" * len(ids))
-                cursor.execute(f"DELETE FROM memories_fts WHERE id IN ({placeholders})", ids)
+            if count > 0:
+                # Delete from memories table - FTS trigger handles FTS cleanup
+                # DO NOT manually delete from memories_fts - causes index corruption
                 cursor.execute("DELETE FROM memories WHERE namespace_id = ?", (namespace_id,))
                 conn.commit()
 
-            return len(ids)
+            return count
         finally:
             conn.close()
 

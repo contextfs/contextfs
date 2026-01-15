@@ -1295,7 +1295,8 @@ class ContextFS:
         full_id = row[0]
         cursor.execute("DELETE FROM memories WHERE id = ?", (full_id,))
         deleted = cursor.rowcount > 0
-        cursor.execute("DELETE FROM memories_fts WHERE id = ?", (full_id,))
+        # FTS trigger (memories_ad) handles FTS deletion automatically
+        # DO NOT manually delete from memories_fts - causes index corruption
 
         conn.commit()
         conn.close()

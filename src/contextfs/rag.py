@@ -113,7 +113,7 @@ class RAGBackend:
         embedding_backend: str = "auto",
         use_gpu: bool | None = None,
         parallel_workers: int | None = None,
-        chroma_host: str | None = None,
+        chroma_host: str = "localhost",
         chroma_port: int = 8000,
         chroma_auto_server: bool = True,
     ):
@@ -121,15 +121,15 @@ class RAGBackend:
         Initialize RAG backend.
 
         Args:
-            data_dir: Directory for ChromaDB storage (embedded mode)
+            data_dir: Directory for ChromaDB storage (for server data path)
             embedding_model: Embedding model name
             collection_name: ChromaDB collection name
             embedding_backend: "fastembed", "sentence_transformers", or "auto"
             use_gpu: Enable GPU acceleration (None = auto-detect)
             parallel_workers: Number of parallel workers for embedding (None = auto)
-            chroma_host: ChromaDB server host (None = embedded mode, else HttpClient)
+            chroma_host: ChromaDB server host (always HTTP mode to prevent corruption)
             chroma_port: ChromaDB server port (default 8000)
-            chroma_auto_server: Auto-start ChromaDB server on corruption (default True)
+            chroma_auto_server: Auto-start ChromaDB server if not running (default True)
         """
         self.data_dir = data_dir
         self.embedding_model_name = embedding_model
@@ -140,13 +140,12 @@ class RAGBackend:
         self._chroma_host = chroma_host
         self._chroma_port = chroma_port
         self._chroma_auto_server = chroma_auto_server
-        self._server_mode = chroma_host is not None
         self._auto_start_attempted = False  # Track if we tried to auto-start server
 
         self._chroma_dir = data_dir / "chroma_db"
         self._chroma_dir.mkdir(parents=True, exist_ok=True)
 
-        # File lock for multi-process safety (only needed in embedded mode)
+        # File lock for multi-process safety (used when starting server)
         self._lock = ChromaLock(data_dir / "chroma.lock")
 
         # Lazy initialization
@@ -166,7 +165,7 @@ class RAGBackend:
         self._initialize_client()
 
     def _initialize_client(self) -> None:
-        """Initialize ChromaDB client and collection with auto-recovery."""
+        """Initialize ChromaDB client via HTTP (always server mode)."""
         import logging
 
         logger = logging.getLogger(__name__)
@@ -175,80 +174,41 @@ class RAGBackend:
             import chromadb
             from chromadb.config import Settings
 
-            if self._server_mode:
-                # Use HttpClient for server mode (no file locking issues)
-                logger.debug(
-                    f"Connecting to ChromaDB server at {self._chroma_host}:{self._chroma_port}"
-                )
-                self._client = chromadb.HttpClient(
-                    host=self._chroma_host,
-                    port=self._chroma_port,
-                    settings=Settings(anonymized_telemetry=False),
-                )
-                self._collection = self._client.get_or_create_collection(
-                    name=self.collection_name,
-                    metadata={"hnsw:space": "cosine"},
-                )
-            else:
-                # Use PersistentClient for embedded mode (with locking)
-                # Lock during initialization to prevent concurrent init race conditions
-                with self._lock:
-                    self._client = chromadb.PersistentClient(
-                        path=str(self._chroma_dir),
-                        settings=Settings(anonymized_telemetry=False),
-                    )
-                    self._collection = self._client.get_or_create_collection(
-                        name=self.collection_name,
-                        metadata={"hnsw:space": "cosine"},
-                    )
+            # Always use HttpClient to prevent corruption from direct file access
+            logger.debug(
+                f"Connecting to ChromaDB server at {self._chroma_host}:{self._chroma_port}"
+            )
+            self._client = chromadb.HttpClient(
+                host=self._chroma_host,
+                port=self._chroma_port,
+                settings=Settings(anonymized_telemetry=False),
+            )
+            # Test connection
+            self._client.heartbeat()
+            self._collection = self._client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"},
+            )
 
         except ImportError:
             raise ImportError("ChromaDB not installed. Install with: pip install chromadb")
 
         except Exception as e:
-            # Check for Rust panic (corrupted ChromaDB) - only in embedded mode
-            if not self._server_mode:
-                error_str = str(e)
-                is_rust_panic = (
-                    "PanicException" in type(e).__name__
-                    or "range start index" in error_str
-                    or "pyo3_runtime" in error_str
-                    or "rust" in error_str.lower()
+            # Connection failed - try to auto-start server if enabled
+            if self._chroma_auto_server and not self._auto_start_attempted:
+                logger.info(
+                    f"ChromaDB server not running at {self._chroma_host}:{self._chroma_port}. "
+                    "Auto-starting..."
                 )
+                self._auto_start_attempted = True
+                if self._try_auto_start_server():
+                    return  # Server started, client initialized
 
-                if is_rust_panic:
-                    logger.warning(
-                        f"ChromaDB corruption detected (Rust panic): {e}. Auto-recovering..."
-                    )
-                    self._auto_recover_chromadb()
-                    return
-
-            raise
-
-    def _auto_recover_chromadb(self) -> None:
-        """Auto-recover from ChromaDB corruption by starting a server.
-
-        If chroma_auto_server is enabled, starts a ChromaDB server using the
-        existing data directory (preserving embeddings). Falls back to rebuild
-        if server start fails.
-        """
-        import logging
-
-        logger = logging.getLogger(__name__)
-
-        # Clean up corrupted client reference
-        self._client = None
-        self._collection = None
-
-        # Try to auto-start ChromaDB server (preserves existing data)
-        if self._chroma_auto_server and not self._auto_start_attempted:
-            self._auto_start_attempted = True
-            if self._try_auto_start_server():
-                return  # Server started, we're now in server mode
-
-        # If server didn't work, try to rebuild embedded mode
-        logger.info("Rebuilding ChromaDB in embedded mode...")
-        self._rebuild_embedded_chromadb()
+            raise ConnectionError(
+                f"Cannot connect to ChromaDB server at {self._chroma_host}:{self._chroma_port}. "
+                f"Start it with: contextfs server start chroma\n"
+                f"Original error: {e}"
+            )
 
     def _try_auto_start_server(self) -> bool:
         """Try to auto-start ChromaDB server using existing data.
@@ -264,12 +224,10 @@ class RAGBackend:
 
         # Check if server is already running
         if self._try_connect_to_server():
-            logger.info("ChromaDB server already running, switching to server mode")
-            self._server_mode = True
-            self._chroma_host = "localhost"
+            logger.info("ChromaDB server already running")
             return True
 
-        logger.info(f"Starting ChromaDB server with existing data at {self._chroma_dir}")
+        logger.info(f"Starting ChromaDB server with data at {self._chroma_dir}")
 
         try:
             # Start ChromaDB server in background using existing data
@@ -298,8 +256,6 @@ class RAGBackend:
                 time.sleep(0.1)
                 if self._try_connect_to_server():
                     logger.info("ChromaDB server started successfully")
-                    self._server_mode = True
-                    self._chroma_host = "127.0.0.1"
                     return True
 
             logger.warning("ChromaDB server did not start in time")
@@ -332,41 +288,6 @@ class RAGBackend:
             return True
         except Exception:
             return False
-
-    def _rebuild_embedded_chromadb(self) -> None:
-        """Rebuild ChromaDB in embedded mode (last resort)."""
-        import logging
-        import shutil
-
-        logger = logging.getLogger(__name__)
-
-        # Remove corrupted data only if we must rebuild
-        if self._chroma_dir.exists():
-            logger.info(f"Removing corrupted ChromaDB at {self._chroma_dir}")
-            shutil.rmtree(self._chroma_dir)
-
-        self._chroma_dir.mkdir(parents=True, exist_ok=True)
-
-        try:
-            import chromadb
-            from chromadb.config import Settings
-
-            self._client = chromadb.PersistentClient(
-                path=str(self._chroma_dir),
-                settings=Settings(anonymized_telemetry=False),
-            )
-
-            self._collection = self._client.get_or_create_collection(
-                name=self.collection_name,
-                metadata={"hnsw:space": "cosine"},
-            )
-
-            logger.info("ChromaDB initialized fresh. Background rebuild needed.")
-            self._needs_rebuild = True
-
-        except Exception as e:
-            logger.error(f"Failed to recover ChromaDB: {e}")
-            raise RuntimeError(f"ChromaDB unrecoverable: {e}") from e
 
     @property
     def needs_rebuild(self) -> bool:

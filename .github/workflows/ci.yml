@@ -295,6 +295,7 @@ jobs:
         run: |
           curl -X POST -H 'Content-type: application/json' \
             --data "{
+              \"text\": \"${{ steps.status.outputs.emoji }} contextfs CI ${{ steps.status.outputs.status }} on ${{ github.ref_name }}\",
               \"attachments\": [{
                 \"color\": \"${{ steps.status.outputs.color }}\",
                 \"blocks\": [

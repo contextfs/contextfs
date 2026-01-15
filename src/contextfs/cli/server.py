@@ -197,6 +197,43 @@ def stop_server(
         raise typer.Exit(1)
 
 
+@server_app.command("restart")
+def restart_server(
+    service: str = typer.Argument(..., help="Service to restart: mcp, chroma, all"),
+    host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
+    port: int = typer.Option(None, "--port", "-p", help="Port (default: mcp=8003, chroma=8000)"),
+):
+    """Restart MCP or ChromaDB server.
+
+    Stops the service if running, then starts it again.
+
+    Examples:
+        contextfs server restart mcp      # Restart MCP server
+        contextfs server restart chroma   # Restart ChromaDB server
+        contextfs server restart all      # Restart both servers
+    """
+    import time
+
+    if service == "mcp" or service == "all":
+        mcp_port = port or 8003
+        if stop_mcp(mcp_port):
+            console.print(f"[yellow]Stopped MCP server (port {mcp_port})[/yellow]")
+            time.sleep(0.5)
+        _start_mcp(host, mcp_port, foreground=False)
+
+    if service == "chroma" or service == "all":
+        chroma_port = port or 8000
+        if stop_chroma(chroma_port):
+            console.print(f"[yellow]Stopped ChromaDB server (port {chroma_port})[/yellow]")
+            time.sleep(0.5)
+        _start_chroma(host, chroma_port, foreground=False)
+
+    if service not in ("mcp", "chroma", "all"):
+        console.print(f"[red]Unknown service: {service}[/red]")
+        console.print("Valid services: mcp, chroma, all")
+        raise typer.Exit(1)
+
+
 @server_app.command("status")
 def server_status(
     service: str = typer.Argument(None, help="Service to check: mcp, chroma (default: all)"),
