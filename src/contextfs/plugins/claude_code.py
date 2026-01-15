@@ -309,7 +309,7 @@ class ClaudeCodePlugin:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "uvx contextfs save-session --label 'auto-compact'",
+                        "command": "uvx contextfs memory save-session --label 'auto-compact' --quiet",
                     }
                 ],
             }
@@ -325,7 +325,7 @@ class ClaudeCodePlugin:
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "uvx contextfs save-session --label 'session-end' --quiet",
+                        "command": "uvx contextfs memory save-session --label 'session-end' --quiet",
                     }
                 ],
             }

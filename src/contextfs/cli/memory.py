@@ -655,6 +655,7 @@ def save_session(
     transcript: Path | None = typer.Option(
         None, "--transcript", "-t", help="Path to transcript JSONL file"
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output"),
 ):
     """Save the current session to memory (for use with hooks)."""
     import json
@@ -694,15 +695,17 @@ def save_session(
                                 content = "\n".join(text_parts)
                             ctx.log_message("assistant", content)
         except Exception as e:
-            console.print(f"[yellow]Warning: Could not read transcript: {e}[/yellow]")
+            if not quiet:
+                console.print(f"[yellow]Warning: Could not read transcript: {e}[/yellow]")
 
     session.summary = f"Auto-saved session: {label or 'unnamed'}"
     ctx.end_session(generate_summary=False)
 
-    console.print("[green]Session saved[/green]")
-    console.print(f"ID: {session.id}")
-    if label:
-        console.print(f"Label: {label}")
+    if not quiet:
+        console.print("[green]Session saved[/green]")
+        console.print(f"ID: {session.id}")
+        if label:
+            console.print(f"Label: {label}")
 
 
 @memory_app.command()
