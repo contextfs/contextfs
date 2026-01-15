@@ -109,8 +109,11 @@ async def create_tables() -> None:
                     try:
                         # Use a fresh connection with autocommit for each statement
                         async with _engine.connect() as stmt_conn:
-                            await stmt_conn.execution_options(isolation_level="AUTOCOMMIT")
-                            await stmt_conn.execute(__import__("sqlalchemy").text(statement))
+                            # execution_options returns a new connection, must use it
+                            autocommit_conn = await stmt_conn.execution_options(
+                                isolation_level="AUTOCOMMIT"
+                            )
+                            await autocommit_conn.execute(__import__("sqlalchemy").text(statement))
                     except Exception as e:
                         # Log but continue - most errors are "already exists"
                         if "already exists" not in str(e).lower():
