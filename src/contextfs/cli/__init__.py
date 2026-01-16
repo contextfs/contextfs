@@ -22,12 +22,12 @@ def version_callback(value: bool):
 app = typer.Typer(
     name="contextfs",
     help="ContextFS - Semantic memory for AI agents",
-    no_args_is_help=True,
 )
 
 
 @app.callback(invoke_without_command=True)
 def main_callback(
+    ctx: typer.Context,
     version: bool | None = typer.Option(
         None,
         "--version",
@@ -38,7 +38,9 @@ def main_callback(
     ),
 ):
     """ContextFS - Semantic memory for AI agents."""
-    pass
+    if ctx.invoked_subcommand is None:
+        console.print(ctx.get_help())
+        raise typer.Exit(0)
 
 
 # Register subcommand groups
