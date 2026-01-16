@@ -34,26 +34,34 @@ server_app = typer.Typer(help="Server commands", no_args_is_help=True)
 
 @server_app.command("start")
 def start_server(
-    service: str = typer.Argument(..., help="Service to start: mcp, chroma"),
+    service: str = typer.Argument("all", help="Service to start: mcp, chroma, all"),
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
     port: int = typer.Option(None, "--port", "-p", help="Port (default: mcp=8003, chroma=8000)"),
-    foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in foreground"),
+    foreground: bool = typer.Option(
+        False, "--foreground", "-f", help="Run in foreground (single service only)"
+    ),
 ):
     """Start MCP or ChromaDB server.
 
     Examples:
-        contextfs start mcp               # Start MCP server (background)
-        contextfs start chroma            # Start ChromaDB server (background)
-        contextfs start mcp -f            # Run MCP in foreground
-        contextfs start mcp -p 9000       # Custom port
+        contextfs server start            # Start all servers (default)
+        contextfs server start mcp        # Start MCP server (background)
+        contextfs server start chroma     # Start ChromaDB server (background)
+        contextfs server start mcp -f     # Run MCP in foreground
+        contextfs server start mcp -p 9000  # Custom port
     """
-    if service == "mcp":
+    if service == "all" and foreground:
+        console.print("[red]Cannot run multiple services in foreground mode[/red]")
+        console.print("Use: contextfs server start mcp -f  OR  contextfs server start chroma -f")
+        raise typer.Exit(1)
+
+    if service == "mcp" or service == "all":
         _start_mcp(host, port or 8003, foreground)
-    elif service == "chroma":
+    if service == "chroma" or service == "all":
         _start_chroma(host, port or 8000, foreground)
-    else:
+    if service not in ("mcp", "chroma", "all"):
         console.print(f"[red]Unknown service: {service}[/red]")
-        console.print("Valid services: mcp, chroma")
+        console.print("Valid services: mcp, chroma, all")
         raise typer.Exit(1)
 
 
@@ -150,7 +158,7 @@ def _start_chroma(host: str, port: int, foreground: bool) -> None:
 
 @server_app.command("stop")
 def stop_server(
-    service: str = typer.Argument(..., help="Service to stop: mcp, chroma, all"),
+    service: str = typer.Argument("all", help="Service to stop: mcp, chroma, all"),
     port: int = typer.Option(None, "--port", "-p", help="Port (default: mcp=8003, chroma=8000)"),
 ):
     """Stop MCP or ChromaDB server.
@@ -159,9 +167,9 @@ def stop_server(
     the process automatically. Use 'contextfs uninstall-service' to remove it.
 
     Examples:
-        contextfs stop mcp                # Stop MCP server
-        contextfs stop chroma             # Stop ChromaDB server
-        contextfs stop all                # Stop both servers
+        contextfs server stop             # Stop all servers (default)
+        contextfs server stop mcp         # Stop MCP server
+        contextfs server stop chroma      # Stop ChromaDB server
     """
     if service == "mcp" or service == "all":
         mcp_port = port or 8003
@@ -199,7 +207,7 @@ def stop_server(
 
 @server_app.command("restart")
 def restart_server(
-    service: str = typer.Argument(..., help="Service to restart: mcp, chroma, all"),
+    service: str = typer.Argument("all", help="Service to restart: mcp, chroma, all"),
     host: str = typer.Option("127.0.0.1", "--host", "-h", help="Host to bind to"),
     port: int = typer.Option(None, "--port", "-p", help="Port (default: mcp=8003, chroma=8000)"),
 ):
@@ -208,9 +216,9 @@ def restart_server(
     Stops the service if running, then starts it again.
 
     Examples:
+        contextfs server restart          # Restart all servers (default)
         contextfs server restart mcp      # Restart MCP server
         contextfs server restart chroma   # Restart ChromaDB server
-        contextfs server restart all      # Restart both servers
     """
     import time
 

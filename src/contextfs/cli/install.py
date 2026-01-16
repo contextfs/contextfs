@@ -163,11 +163,10 @@ def install_claude(
         if "mcpServers" not in claude_config:
             claude_config["mcpServers"] = {}
 
-        # Add contextfs MCP server
+        # Add contextfs MCP server (SSE/HTTP mode)
         claude_config["mcpServers"]["contextfs"] = {
-            "command": "python",
-            "args": ["-m", "contextfs.cli", "server", "mcp", "--mode", "stdio"],
-            "env": {},
+            "type": "sse",
+            "url": "http://127.0.0.1:8003/mcp/sse",
         }
 
         with open(mcp_config_path, "w") as f:
