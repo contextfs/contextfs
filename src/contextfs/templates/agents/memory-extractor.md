@@ -52,7 +52,11 @@ contextfs_save(
 )
 ```
 
-**2. Error (REQUIRED structured_data)**
+**2. Error (REQUIRED structured_data) - ONLY for ACTUAL technical errors**
+- ONLY actual technical errors (stack traces, error messages, exceptions)
+- DO NOT classify normal assistant messages as errors
+- DO NOT classify phrases like "Let me...", "Now let me...", "I'll..." as errors
+
 ```python
 contextfs_save(
     type="error",
