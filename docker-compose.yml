@@ -1,22 +1,25 @@
-# ContextFS Development & Testing Environment
+# ContextFS Development Environment
 # Usage: docker-compose up -d
+#
+# Default services: sync-postgres, sync-api, web
+# Optional profiles: linux, admin
 
 services:
   # ==========================================================================
-  # PostgreSQL with pgvector (for unified backend)
+  # PostgreSQL for Sync Service (default)
   # ==========================================================================
-  postgres:
+  sync-postgres:
     image: pgvector/pgvector:pg16
-    container_name: contextfs-postgres
+    container_name: contextfs-sync-postgres
     environment:
       POSTGRES_USER: contextfs
       POSTGRES_PASSWORD: contextfs
       POSTGRES_DB: contextfs
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./scripts/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - sync_postgres_data:/var/lib/postgresql/data
+      - ./migrations/sync-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U contextfs -d contextfs"]
       interval: 10s
@@ -25,68 +28,105 @@ services:
     restart: unless-stopped
 
   # ==========================================================================
-  # FalkorDB (Graph Database for Memory Lineage)
+  # Sync API Service (default)
+  # FastAPI server handling push/pull sync operations
   # ==========================================================================
-  falkordb:
-    image: falkordb/falkordb:latest
-    container_name: contextfs-falkordb
-    ports:
-      - "6379:6379"
-    volumes:
-      - falkordb_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  # ==========================================================================
-  # ChromaDB Server (RECOMMENDED - prevents corruption from multi-MCP access)
-  # ==========================================================================
-  chromadb:
-    image: chromadb/chroma:latest
-    container_name: contextfs-chromadb
-    ports:
-      - "8000:8000"
-    volumes:
-      - chroma_data:/chroma/chroma
-    environment:
-      - IS_PERSISTENT=TRUE
-      - ANONYMIZED_TELEMETRY=FALSE
-    restart: unless-stopped
-    profiles:
-      - with-chromadb
-
-  # ==========================================================================
-  # ContextFS API server (optional - for remote access)
-  # ==========================================================================
-  api:
+  sync-api:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: contextfs-api
+      dockerfile: docker/Dockerfile.sync
+    container_name: contextfs-sync-api
     environment:
-      CONTEXTFS_BACKEND: postgres+falkordb
-      CONTEXTFS_POSTGRES_URL: postgresql://contextfs:contextfs@postgres:5432/contextfs
-      CONTEXTFS_FALKORDB_ENABLED: "true"
-      CONTEXTFS_FALKORDB_HOST: falkordb
-      CONTEXTFS_DATA_DIR: /data
+      CONTEXTFS_POSTGRES_URL: postgresql://contextfs:contextfs@sync-postgres:5432/contextfs
+      CONTEXTFS_SYNC_PORT: "8766"
+      CONTEXTFS_SYNC_HOST: "0.0.0.0"
+      CORS_ORIGINS: "*"
+      # Admin user (optional)
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # OAuth providers (optional)
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # Email service (Mailgun)
+      MAILGUN_API_KEY: ${MAILGUN_API_KEY:-}
+      MAILGUN_DOMAIN: ${MAILGUN_DOMAIN:-appmail.magnetonlabs.com}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      # Stripe billing
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_PRO: ${STRIPE_PRICE_PRO:-}
+      STRIPE_PRICE_TEAM: ${STRIPE_PRICE_TEAM:-}
     ports:
-      - "8765:8765"
+      - "8766:8766"
     volumes:
-      - contextfs_data:/data
+      # Mount source for development (hot reload)
+      - ./src/contextfs:/app/src/contextfs:ro
+      - ./service:/app/service:ro
     depends_on:
-      postgres:
-        condition: service_healthy
-      falkordb:
+      sync-postgres:
         condition: service_healthy
     restart: unless-stopped
-    profiles:
-      - with-api
 
   # ==========================================================================
-  # pgAdmin for database management (optional)
+  # ContextFS Web UI - Next.js Dashboard (default)
+  # ==========================================================================
+  web:
+    image: node:20-slim
+    container_name: contextfs-web
+    working_dir: /app
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: http://localhost:8766
+      API_URL_INTERNAL: http://sync-api:8766
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-contextfs-dev-secret-change-in-production}
+      # OAuth providers
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../contextfs-web:/app
+      - web_node_modules:/app/node_modules
+    depends_on:
+      - sync-api
+    command: >
+      bash -c "npm install && npm run dev"
+    restart: unless-stopped
+
+  # ==========================================================================
+  # Linux Full Client - Ubuntu with AI CLIs (optional)
+  # ==========================================================================
+  linux-full:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.linux-client
+    container_name: contextfs-linux-full
+    environment:
+      CONTEXTFS_SYNC_SERVER: http://sync-api:8766
+      PYTHONPATH: /contextfs/src
+      # API keys passed at runtime or via .env
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - .:/contextfs:ro
+      - linux_full_data:/root/.contextfs
+      - linux_npm_cache:/root/.npm
+    depends_on:
+      sync-postgres:
+        condition: service_healthy
+    command: tail -f /dev/null
+    restart: unless-stopped
+    profiles:
+      - linux
+
+  # ==========================================================================
+  # pgAdmin for Database Management (optional)
   # ==========================================================================
   pgadmin:
     image: dpage/pgadmin4:latest
@@ -100,34 +140,17 @@ services:
     volumes:
       - pgadmin_data:/var/lib/pgadmin
     depends_on:
-      - postgres
+      - sync-postgres
     restart: unless-stopped
     profiles:
-      - with-admin
-
-  # ==========================================================================
-  # RedisInsight for FalkorDB management (optional)
-  # ==========================================================================
-  redisinsight:
-    image: redislabs/redisinsight:latest
-    container_name: contextfs-redisinsight
-    ports:
-      - "5540:5540"
-    volumes:
-      - redisinsight_data:/data
-    depends_on:
-      - falkordb
-    restart: unless-stopped
-    profiles:
-      - with-admin
+      - admin
 
 volumes:
-  postgres_data:
-  falkordb_data:
-  chroma_data:
-  contextfs_data:
+  sync_postgres_data:
+  web_node_modules:
+  linux_full_data:
+  linux_npm_cache:
   pgadmin_data:
-  redisinsight_data:
 
 networks:
   default:
@@ -136,52 +159,28 @@ networks:
 # ==========================================================================
 # Usage Examples
 # ==========================================================================
-# RECOMMENDED: Start ChromaDB server (prevents corruption from multi-process):
-#   docker-compose --profile with-chromadb up -d chromadb
-#   export CONTEXTFS_CHROMA_HOST=localhost
-#   export CONTEXTFS_CHROMA_PORT=8000
+# Start default stack (sync-postgres, sync-api, web):
+#   docker-compose up -d
 #
-# Start core services (Postgres + FalkorDB):
-#   docker-compose up -d postgres falkordb
+# Start with Linux testing container:
+#   docker-compose --profile linux up -d
 #
-# Start with admin tools:
-#   docker-compose --profile with-admin up -d
-#
-# Start everything:
-#   docker-compose --profile with-admin --profile with-api --profile with-chromadb up -d
+# Start with pgAdmin:
+#   docker-compose --profile admin up -d
 #
 # View logs:
-#   docker-compose logs -f postgres falkordb chromadb
+#   docker-compose logs -f sync-api
 #
 # Stop all:
 #   docker-compose down
 #
-# Reset all data:
+# Reset database:
 #   docker-compose down -v
 #
 # ==========================================================================
-# .env Configuration
+# Local Development (no Docker needed for ContextFS itself)
 # ==========================================================================
-# RECOMMENDED for multi-MCP usage (prevents ChromaDB corruption):
-#   docker-compose --profile with-chromadb up -d chromadb
-#   CONTEXTFS_CHROMA_HOST=localhost
-#   CONTEXTFS_CHROMA_PORT=8000
-#
-# For SQLite (default - no docker needed):
-#   CONTEXTFS_BACKEND=sqlite
-#
-# For SQLite + FalkorDB:
-#   CONTEXTFS_BACKEND=sqlite+falkordb
-#   CONTEXTFS_FALKORDB_ENABLED=true
-#   docker-compose up -d falkordb
-#
-# For PostgreSQL unified:
-#   CONTEXTFS_BACKEND=postgres
-#   CONTEXTFS_POSTGRES_URL=postgresql://contextfs:contextfs@localhost:5432/contextfs
-#   docker-compose up -d postgres
-#
-# For PostgreSQL + FalkorDB (full features):
-#   CONTEXTFS_BACKEND=postgres+falkordb
-#   CONTEXTFS_POSTGRES_URL=postgresql://contextfs:contextfs@localhost:5432/contextfs
-#   CONTEXTFS_FALKORDB_ENABLED=true
-#   docker-compose up -d postgres falkordb
+# ContextFS uses SQLite locally (~/.contextfs/context.db)
+# ChromaDB runs embedded (no separate server)
+# Only Docker services needed are for sync/web testing
+# ==========================================================================

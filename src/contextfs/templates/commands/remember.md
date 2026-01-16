@@ -2,86 +2,127 @@
 
 Extract and save important information from this conversation to ContextFS long-term memory.
 
-## Instructions
+## TYPE-SAFE Memory Operations
 
-Analyze the current conversation and extract memories in these categories:
+**CRITICAL: Some types REQUIRE structured_data with specific fields.**
 
-### 1. Decisions Made
-For each decision identified:
-```
+### Types WITH Required structured_data
+
+| Type | Required Fields |
+|------|-----------------|
+| `decision` | `decision`, `rationale`, `alternatives[]` |
+| `procedural` | `steps[]` (title, prerequisites optional) |
+| `error` | `error_type`, `message`, `resolution` |
+| `api` | `endpoint`, `method` |
+| `config` | `name`, `settings{}` |
+
+### Types WITHOUT Required structured_data
+
+| Type | Use Case |
+|------|----------|
+| `fact` | Learned information about codebase/user |
+| `episodic` | Session summaries, conversations |
+| `code` | Code snippets, patterns |
+| `user` | User preferences |
+
+---
+
+## Extraction Categories
+
+### 1. Decisions Made (REQUIRED: structured_data)
+```python
 contextfs_save(
-    content="Decision: [what was decided]",
     type="decision",
-    summary="[brief summary]",
+    summary="Chose PostgreSQL over MongoDB",
+    content="Full rationale and context...",
     tags=["decision", "<topic>"],
     structured_data={
-        "rationale": "[why this decision was made]",
-        "alternatives": ["[other options considered]"],
-        "context": "[relevant context]"
+        "decision": "Use PostgreSQL for user data",      # REQUIRED
+        "rationale": "Team expertise, ACID compliance",  # REQUIRED
+        "alternatives": ["MongoDB", "DynamoDB"]          # REQUIRED
     }
 )
 ```
 
-### 2. Facts Learned
-For each new fact about the codebase, user preferences, or domain:
-```
+### 2. Errors and Solutions (REQUIRED: structured_data)
+```python
 contextfs_save(
-    content="[the fact]",
+    type="error",
+    summary="ChromaDB collection not found",
+    content="Full error context and stack trace...",
+    tags=["error", "<technology>"],
+    structured_data={
+        "error_type": "CollectionNotFoundError",  # REQUIRED
+        "message": "Collection does not exist",   # REQUIRED
+        "resolution": "Reconnect MCP server"      # REQUIRED
+    }
+)
+```
+
+### 3. Procedures (REQUIRED: structured_data with steps[])
+```python
+contextfs_save(
+    type="procedural",
+    summary="Deploy to Railway",
+    content="Detailed deployment procedure...",
+    tags=["procedure", "<topic>"],
+    structured_data={
+        "title": "Railway Deployment",                                    # optional
+        "steps": ["Build Docker", "Push to registry", "Redeploy"],        # REQUIRED
+        "prerequisites": ["Docker installed", "Railway CLI configured"]   # optional
+    }
+)
+```
+
+### 4. Facts Learned (no structured_data required)
+```python
+contextfs_save(
     type="fact",
-    summary="[brief summary]",
+    summary="API uses JWT auth with 1hr expiry",
+    content="The auth system uses JWT tokens...",
     tags=["fact", "<topic>"]
 )
 ```
 
-### 3. Errors and Solutions
-For each error encountered and resolved:
-```
+### 5. Code Patterns (no structured_data required)
+```python
 contextfs_save(
-    content="Error: [error description]\nCause: [root cause]\nSolution: [how it was fixed]",
-    type="error",
-    summary="[brief summary]",
-    tags=["error", "<technology>", "solution"]
-)
-```
-
-### 4. Procedures Discovered
-For any workflow or procedure established:
-```
-contextfs_save(
-    content="## [Procedure Name]\n\n1. [Step 1]\n2. [Step 2]\n...",
-    type="procedural",
-    summary="[brief summary]",
-    tags=["procedure", "<topic>"]
-)
-```
-
-### 5. Code Patterns
-For notable code patterns or implementations:
-```
-contextfs_save(
-    content="[code pattern with explanation]",
     type="code",
-    summary="[what this pattern does]",
-    tags=["code", "<language>", "<pattern-type>"]
+    summary="Auth middleware pattern",
+    content="```python\ndef auth_middleware():\n    ...\n```",
+    tags=["code", "<language>", "<pattern>"]
 )
 ```
+
+---
 
 ## Execution Steps
 
 1. **Review the conversation** - Identify all memorable content
-2. **Check for duplicates** - Search existing memories before saving:
-   ```
+
+2. **Search before saving** - Check for duplicates:
+   ```python
    contextfs_search(query="<topic>", limit=3)
    ```
-3. **Save new memories** - Use appropriate type and structured_data
-4. **Link related memories** - If connecting to existing memories:
+
+3. **Evolve don't duplicate** - If similar memory exists, update it:
+   ```python
+   contextfs_evolve(memory_id="<existing_id>", new_content="Updated info...")
    ```
+
+4. **Save new memories** - Use appropriate type WITH required structured_data
+
+5. **Link related memories** - Connect to existing context:
+   ```python
    contextfs_link(from_id="<new_id>", to_id="<existing_id>", relation="related_to")
    ```
-5. **Save session** - Finally, save the session itself:
-   ```
+
+6. **Save session** - Finally, save the session summary:
+   ```python
    contextfs_save(save_session="current", label="<descriptive-label>")
    ```
+
+---
 
 ## Output
 
@@ -90,4 +131,4 @@ After extraction, report:
 - Any memories that were evolved (updated) instead of created new
 - Session label used
 
-**Important**: Be thorough but avoid duplicating information that's already in memory. Always search first.
+**Important**: Be thorough but avoid duplicating. Always search first, evolve if exists.

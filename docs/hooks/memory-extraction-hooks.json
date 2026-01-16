@@ -11,7 +11,7 @@
             "hooks": [
               {
                 "type": "command",
-                "command": "python -m contextfs.cli extract transcript --save --quiet && python -m contextfs.cli memory save-session --label 'session-end' --quiet"
+                "command": "python -m contextfs.cli memory extract-transcript --save --quiet && python -m contextfs.cli memory save-session --label 'session-end' --quiet"
               }
             ]
           }
@@ -42,7 +42,7 @@
             "hooks": [
               {
                 "type": "command",
-                "command": "python -m contextfs.cli extract transcript --save --quiet && python -m contextfs.cli memory save-session --label 'session-end' --quiet"
+                "command": "python -m contextfs.cli memory extract-transcript --save --quiet && python -m contextfs.cli memory save-session --label 'session-end' --quiet"
               }
             ]
           }
@@ -58,7 +58,7 @@
           "hooks": [
             {
               "type": "command",
-              "command": "python -m contextfs.cli extract transcript --save --quiet --agent-role test"
+              "command": "python -m contextfs.cli memory extract-transcript --save --quiet --agent-role test"
             }
           ]
         }
@@ -70,7 +70,7 @@
           "hooks": [
             {
               "type": "command",
-              "command": "python -m contextfs.cli extract transcript --save --quiet --agent-role code"
+              "command": "python -m contextfs.cli memory extract-transcript --save --quiet --agent-role code"
             }
           ]
         }
@@ -82,7 +82,7 @@
           "hooks": [
             {
               "type": "command",
-              "command": "python -m contextfs.cli extract transcript --save --quiet --agent-role review"
+              "command": "python -m contextfs.cli memory extract-transcript --save --quiet --agent-role review"
             }
           ]
         }
