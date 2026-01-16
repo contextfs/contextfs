@@ -277,12 +277,15 @@ class StorageRouter(StorageBackend):
         return self._recall_from_chromadb(memory_id)
 
     def _recall_from_sqlite(self, memory_id: str) -> Memory | None:
-        """Recall memory from SQLite."""
+        """Recall memory from SQLite (excludes soft-deleted)."""
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
         try:
-            cursor.execute("SELECT * FROM memories WHERE id LIKE ?", (f"{memory_id}%",))
+            cursor.execute(
+                "SELECT * FROM memories WHERE id LIKE ? AND deleted_at IS NULL",
+                (f"{memory_id}%",),
+            )
             row = cursor.fetchone()
 
             if row:
