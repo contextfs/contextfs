@@ -164,8 +164,11 @@ async def push_changes(
     server_timestamp = datetime.now(timezone.utc)
 
     # Process memories
+    force = getattr(request, "force", False)
     for memory in request.memories:
-        result = await _process_memory_push(session, memory, request.device_id, conflicts, user_id)
+        result = await _process_memory_push(
+            session, memory, request.device_id, conflicts, user_id, force=force
+        )
         if result == "accepted":
             accepted += 1
         elif result == "rejected":
@@ -174,7 +177,9 @@ async def push_changes(
 
     # Process sessions
     for sess in request.sessions:
-        result = await _process_session_push(session, sess, request.device_id, conflicts, user_id)
+        result = await _process_session_push(
+            session, sess, request.device_id, conflicts, user_id, force=force
+        )
         if result == "accepted":
             accepted += 1
         elif result == "rejected":
@@ -182,7 +187,7 @@ async def push_changes(
 
     # Process edges
     for edge in request.edges:
-        result = await _process_edge_push(session, edge, request.device_id, conflicts)
+        result = await _process_edge_push(session, edge, request.device_id, conflicts, force=force)
         if result == "accepted":
             accepted += 1
         elif result == "rejected":
@@ -215,8 +220,13 @@ async def _process_memory_push(
     device_id: str,
     conflicts: list[ConflictInfo],
     user_id: str | None = None,
+    force: bool = False,
 ) -> str:
-    """Process a single memory push. Returns 'accepted', 'rejected', or 'conflict'."""
+    """Process a single memory push. Returns 'accepted', 'rejected', or 'conflict'.
+
+    Args:
+        force: If True, overwrite server data regardless of vector clock state.
+    """
     result = await session.execute(
         select(SyncedMemoryModel).where(SyncedMemoryModel.id == memory.id)
     )
@@ -280,11 +290,47 @@ async def _process_memory_push(
         return "accepted"
 
     elif client_clock.happens_before(server_clock):
-        # Client is behind - reject (stale)
+        # Client is behind - normally reject (stale), but force overrides
+        if force:
+            # Force update - overwrite server data
+            existing.content = memory.content
+            existing.type = memory.type
+            existing.tags = memory.tags
+            existing.summary = memory.summary
+            existing.repo_url = memory.repo_url
+            existing.repo_name = memory.repo_name
+            existing.relative_path = memory.relative_path
+            existing.updated_at = memory.updated_at
+            existing.vector_clock = client_clock.merge(server_clock).to_dict()
+            existing.content_hash = memory.content_hash
+            existing.deleted_at = memory.deleted_at
+            existing.last_modified_by = device_id
+            existing.metadata = memory.metadata
+            if hasattr(existing, "embedding") and memory.embedding:
+                existing.embedding = memory.embedding
+            return "accepted"
         return "rejected"
 
     else:
-        # Concurrent changes - conflict
+        # Concurrent changes - conflict (force also resolves conflicts)
+        if force:
+            # Force update - overwrite server data
+            existing.content = memory.content
+            existing.type = memory.type
+            existing.tags = memory.tags
+            existing.summary = memory.summary
+            existing.repo_url = memory.repo_url
+            existing.repo_name = memory.repo_name
+            existing.relative_path = memory.relative_path
+            existing.updated_at = memory.updated_at
+            existing.vector_clock = client_clock.merge(server_clock).to_dict()
+            existing.content_hash = memory.content_hash
+            existing.deleted_at = memory.deleted_at
+            existing.last_modified_by = device_id
+            existing.metadata = memory.metadata
+            if hasattr(existing, "embedding") and memory.embedding:
+                existing.embedding = memory.embedding
+            return "accepted"
         conflicts.append(
             ConflictInfo(
                 entity_id=memory.id,
@@ -306,6 +352,7 @@ async def _process_session_push(
     device_id: str,
     conflicts: list[ConflictInfo],
     user_id: str | None = None,
+    force: bool = False,
 ) -> str:
     """Process a single session push."""
     result = await session.execute(
@@ -355,9 +402,29 @@ async def _process_session_push(
         return "accepted"
 
     elif client_clock.happens_before(server_clock):
+        if force:
+            existing.label = sess.label
+            existing.summary = sess.summary
+            existing.ended_at = sess.ended_at
+            existing.updated_at = sess.updated_at
+            existing.vector_clock = client_clock.merge(server_clock).to_dict()
+            existing.deleted_at = sess.deleted_at
+            existing.last_modified_by = device_id
+            existing.metadata = sess.metadata
+            return "accepted"
         return "rejected"
 
     else:
+        if force:
+            existing.label = sess.label
+            existing.summary = sess.summary
+            existing.ended_at = sess.ended_at
+            existing.updated_at = sess.updated_at
+            existing.vector_clock = client_clock.merge(server_clock).to_dict()
+            existing.deleted_at = sess.deleted_at
+            existing.last_modified_by = device_id
+            existing.metadata = sess.metadata
+            return "accepted"
         conflicts.append(
             ConflictInfo(
                 entity_id=sess.id,
@@ -378,6 +445,7 @@ async def _process_edge_push(
     edge: SyncedEdge,
     device_id: str,
     conflicts: list[ConflictInfo],
+    force: bool = False,
 ) -> str:
     """Process a single edge push."""
     result = await session.execute(
@@ -423,9 +491,25 @@ async def _process_edge_push(
         return "accepted"
 
     elif client_clock.happens_before(server_clock):
+        if force:
+            existing.weight = edge.weight
+            existing.updated_at = edge.updated_at
+            existing.vector_clock = client_clock.merge(server_clock).to_dict()
+            existing.deleted_at = edge.deleted_at
+            existing.last_modified_by = device_id
+            existing.metadata = edge.metadata
+            return "accepted"
         return "rejected"
 
     else:
+        if force:
+            existing.weight = edge.weight
+            existing.updated_at = edge.updated_at
+            existing.vector_clock = client_clock.merge(server_clock).to_dict()
+            existing.deleted_at = edge.deleted_at
+            existing.last_modified_by = device_id
+            existing.metadata = edge.metadata
+            return "accepted"
         conflicts.append(
             ConflictInfo(
                 entity_id=edge.id,

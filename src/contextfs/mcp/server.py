@@ -490,6 +490,11 @@ async def list_tools() -> list[Tool]:
                         "description": "Push all memories, not just changed ones (default: false)",
                         "default": False,
                     },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Force overwrite server data regardless of vector clock state. Use to fix stale memories that keep getting rejected.",
+                        "default": False,
+                    },
                 },
             },
         ),
@@ -542,7 +547,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         elif name == "contextfs_link":
             return _handle_link(ctx, arguments)
         elif name == "contextfs_sync":
-            return await _handle_sync(ctx, arguments)
+            return await _handle_sync(arguments)
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
     except Exception as e:
@@ -1066,81 +1071,71 @@ def _handle_link(ctx: ContextFS, arguments: dict) -> list[TextContent]:
     ]
 
 
-def _get_cloud_config() -> dict:
-    """Get cloud configuration from config file."""
-    import yaml
-
-    config_path = Path.home() / ".contextfs" / "config.yaml"
-    if not config_path.exists():
-        return {}
-
-    with open(config_path) as f:
-        config = yaml.safe_load(f) or {}
-
-    return config.get("cloud", {})
-
-
-async def _handle_sync(ctx: ContextFS, arguments: dict) -> list[TextContent]:
+async def _handle_sync(arguments: dict) -> list[TextContent]:
     """Handle contextfs_sync tool."""
-    from contextfs.sync.client import SyncClient
+    import time
 
-    # Get cloud configuration
-    cloud_config = _get_cloud_config()
+    from contextfs.sync import SyncClient
 
-    if not cloud_config.get("enabled"):
-        return [
-            TextContent(
-                type="text",
-                text="Cloud sync is disabled.\nRun: contextfs cloud configure --enabled",
-            )
-        ]
-
-    if not cloud_config.get("api_key"):
-        return [
-            TextContent(
-                type="text",
-                text="No API key configured.\nRun: contextfs cloud login",
-            )
-        ]
-
-    server_url = cloud_config.get("server_url", "https://api.contextfs.ai")
-    api_key = cloud_config.get("api_key")
     direction = arguments.get("direction", "both")
     push_all = arguments.get("push_all", False)
+    force = arguments.get("force", False)
 
+    start = time.time()
     try:
-        async with SyncClient(server_url, ctx=ctx, api_key=api_key) as client:
+        async with SyncClient() as client:
             if direction == "push":
-                result = await client.push(push_all=push_all)
+                result = await client.push(push_all=push_all, force=force)
+                duration_ms = (time.time() - start) * 1000
                 return [
                     TextContent(
                         type="text",
-                        text=f"Push complete.\nAccepted: {result.accepted}\nRejected: {result.rejected}\nConflicts: {len(result.conflicts)}",
+                        text=(
+                            f"Push complete ({duration_ms:.0f}ms).\n"
+                            f"Accepted: {result.accepted}\n"
+                            f"Rejected: {result.rejected}"
+                            + (f"\nConflicts: {len(result.conflicts)}" if result.conflicts else "")
+                        ),
                     )
                 ]
             elif direction == "pull":
-                result = await client.pull_diff()
+                result = await client.pull()
+                duration_ms = (time.time() - start) * 1000
                 return [
                     TextContent(
                         type="text",
-                        text=f"Pull complete.\nMemories: {len(result.missing_memories)}\nSessions: {len(result.missing_sessions)}\nDeleted: {len(result.deleted_memory_ids)}",
+                        text=(
+                            f"Pull complete.\n"
+                            f"Memories: {len(result.memories)}\n"
+                            f"Sessions: {len(result.sessions)}"
+                            + (
+                                f"\nDeleted: {len(result.deleted_ids)}"
+                                if result.deleted_ids
+                                else ""
+                            )
+                        ),
                     )
                 ]
             else:  # both
-                result = await client.sync_all()
-                pushed = result.pushed
-                pulled = result.pulled
+                # First push
+                push_result = await client.push(push_all=push_all, force=force)
+                # Then pull
+                pull_result = await client.pull()
+                duration_ms = (time.time() - start) * 1000
+
                 return [
                     TextContent(
                         type="text",
-                        text=f"Sync complete ({result.duration_ms:.0f}ms).\n"
-                        f"Pushed: {pushed.accepted} accepted, {pushed.rejected} rejected\n"
-                        f"Pulled: {len(pulled.memories)} memories, {len(pulled.sessions)} sessions",
+                        text=(
+                            f"Sync complete ({duration_ms:.0f}ms).\n"
+                            f"Pushed: {push_result.accepted} accepted, {push_result.rejected} rejected\n"
+                            f"Pulled: {len(pull_result.memories)} memories, {len(pull_result.sessions)} sessions"
+                        ),
                     )
                 ]
     except Exception as e:
         logger.exception("Sync failed")
-        return [TextContent(type="text", text=f"Sync failed: {str(e)}")]
+        return [TextContent(type="text", text=f"Sync failed: {e}")]
 
 
 # SSE Transport setup
@@ -1170,6 +1165,7 @@ def create_mcp_app() -> Starlette:
         Route("/mcp/sse", endpoint=handle_sse, methods=["GET"]),
         Mount("/mcp/messages/", app=sse_transport.handle_post_message),
     ]
+
     return Starlette(routes=routes)
 
 

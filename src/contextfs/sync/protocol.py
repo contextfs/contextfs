@@ -217,6 +217,9 @@ class SyncPushRequest(BaseModel):
     # Optional: specify backend type for routing
     backend_type: BackendType | None = None
 
+    # Force overwrite server data regardless of vector clock state
+    force: bool = False
+
 
 class ConflictInfo(BaseModel):
     """Information about a sync conflict."""

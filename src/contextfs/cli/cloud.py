@@ -704,6 +704,9 @@ def sync(
     push_all: bool = typer.Option(
         False, "--all", "-a", help="Push all memories (not just changed)"
     ),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Force overwrite server data regardless of vector clock state"
+    ),
 ):
     """Sync memories with cloud (authenticated sync)."""
     cloud_config = _get_cloud_config()
@@ -732,11 +735,15 @@ def sync(
         ) as client:
             console.print(f"[dim]Syncing with {server_url}...[/dim]")
             console.print("[dim]E2EE: automatic[/dim]")
+            if force:
+                console.print("[dim]Force mode: overwriting stale data[/dim]")
 
-            result = await client.sync_all()
+            result = await client.sync_all(force=force)
 
             console.print("[green]Sync complete![/green]")
             console.print(f"  Pushed: {result.pushed.accepted} memories")
+            if result.pushed.rejected:
+                console.print(f"  Rejected: {result.pushed.rejected}")
             console.print(f"  Pulled: {len(result.pulled.memories)} memories")
             console.print(f"  Duration: {result.duration_ms:.0f}ms")
 
