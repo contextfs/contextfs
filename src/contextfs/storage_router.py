@@ -151,8 +151,20 @@ class StorageRouter(StorageBackend):
 
     def _save_to_sqlite(self, memory: Memory) -> None:
         """Save a single memory to SQLite."""
+        import hashlib
+
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
+
+        # Compute content hash for deduplication
+        content_hash = getattr(memory, "content_hash", None)
+        if not content_hash:
+            content_hash = hashlib.sha256(memory.content.encode()).hexdigest()[:16]
+
+        # Get vector_clock from metadata if available (for sync consistency)
+        vector_clock = None
+        if memory.metadata and memory.metadata.get("_vector_clock"):
+            vector_clock = json.dumps(memory.metadata["_vector_clock"])
 
         try:
             cursor.execute(
@@ -160,8 +172,9 @@ class StorageRouter(StorageBackend):
                 INSERT OR REPLACE INTO memories
                 (id, content, type, tags, summary, namespace_id,
                  source_file, source_repo, source_tool, project,
-                 session_id, created_at, updated_at, metadata, structured_data)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 session_id, created_at, updated_at, metadata, structured_data,
+                 authoritative, content_hash, vector_clock)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     memory.id,
@@ -181,6 +194,9 @@ class StorageRouter(StorageBackend):
                     json.dumps(memory.structured_data)
                     if memory.structured_data is not None
                     else None,
+                    1 if getattr(memory, "authoritative", False) else 0,
+                    content_hash,
+                    vector_clock,
                 ),
             )
 
@@ -199,6 +215,8 @@ class StorageRouter(StorageBackend):
 
     def _save_batch_to_sqlite(self, memories: list[Memory]) -> None:
         """Batch save memories to SQLite (much faster)."""
+        import hashlib
+
         if not memories:
             return
 
@@ -206,27 +224,39 @@ class StorageRouter(StorageBackend):
         cursor = conn.cursor()
 
         try:
-            # Prepare batch data
-            memory_rows = [
-                (
-                    m.id,
-                    m.content,
-                    m.type.value,
-                    json.dumps(m.tags),
-                    m.summary,
-                    m.namespace_id,
-                    m.source_file,
-                    m.source_repo,
-                    m.source_tool,
-                    m.project,
-                    m.session_id,
-                    m.created_at.isoformat(),
-                    m.updated_at.isoformat(),
-                    json.dumps(m.metadata),
-                    json.dumps(m.structured_data) if m.structured_data is not None else None,
+            # Prepare batch data with content_hash, authoritative, and vector_clock
+            memory_rows = []
+            for m in memories:
+                content_hash = getattr(m, "content_hash", None)
+                if not content_hash:
+                    content_hash = hashlib.sha256(m.content.encode()).hexdigest()[:16]
+
+                vector_clock = None
+                if m.metadata and m.metadata.get("_vector_clock"):
+                    vector_clock = json.dumps(m.metadata["_vector_clock"])
+
+                memory_rows.append(
+                    (
+                        m.id,
+                        m.content,
+                        m.type.value,
+                        json.dumps(m.tags),
+                        m.summary,
+                        m.namespace_id,
+                        m.source_file,
+                        m.source_repo,
+                        m.source_tool,
+                        m.project,
+                        m.session_id,
+                        m.created_at.isoformat(),
+                        m.updated_at.isoformat(),
+                        json.dumps(m.metadata),
+                        json.dumps(m.structured_data) if m.structured_data is not None else None,
+                        1 if getattr(m, "authoritative", False) else 0,
+                        content_hash,
+                        vector_clock,
+                    )
                 )
-                for m in memories
-            ]
 
             fts_rows = [(m.id, m.content, m.summary, " ".join(m.tags)) for m in memories]
 
@@ -236,8 +266,9 @@ class StorageRouter(StorageBackend):
                 INSERT OR REPLACE INTO memories
                 (id, content, type, tags, summary, namespace_id,
                  source_file, source_repo, source_tool, project,
-                 session_id, created_at, updated_at, metadata, structured_data)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 session_id, created_at, updated_at, metadata, structured_data,
+                 authoritative, content_hash, vector_clock)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 memory_rows,
             )

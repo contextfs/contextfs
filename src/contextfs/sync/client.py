@@ -643,9 +643,19 @@ class SyncClient:
             memories = [m for m in memories if m.namespace_id in namespace_ids]
 
         # Filter by last sync time if we have one (unless push_all)
+        # IMPORTANT: Also include memories that have never been synced (no _vector_clock)
         if self._last_sync and not push_all:
             last_sync_aware = _ensure_tz_aware(self._last_sync)
-            memories = [m for m in memories if _ensure_tz_aware(m.updated_at) > last_sync_aware]
+
+            def needs_sync(m: Memory) -> bool:
+                # Check if memory has been synced before (has _vector_clock in metadata)
+                has_vector_clock = m.metadata and m.metadata.get("_vector_clock") is not None
+                # Include if: updated after last sync OR never synced before
+                if not has_vector_clock:
+                    return True  # Never synced, must push
+                return _ensure_tz_aware(m.updated_at) > last_sync_aware
+
+            memories = [m for m in memories if needs_sync(m)]
 
         return memories
 

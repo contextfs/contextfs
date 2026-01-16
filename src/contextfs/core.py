@@ -760,11 +760,16 @@ class ContextFS:
         conn = sqlite3.connect(self._db_path)
         cursor = conn.cursor()
 
+        # Get vector_clock from metadata if available (for sync consistency)
+        vector_clock = None
+        if memory.metadata and memory.metadata.get("_vector_clock"):
+            vector_clock = json.dumps(memory.metadata["_vector_clock"])
+
         cursor.execute(
             """
             INSERT OR REPLACE INTO memories (id, content, type, tags, summary, namespace_id,
-                                  source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata, structured_data, authoritative, content_hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata, structured_data, authoritative, content_hash, vector_clock)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 memory.id,
@@ -784,6 +789,7 @@ class ContextFS:
                 json.dumps(memory.structured_data) if memory.structured_data is not None else None,
                 1 if memory.authoritative else 0,
                 content_hash,
+                vector_clock,
             ),
         )
 
@@ -881,11 +887,16 @@ class ContextFS:
                     # skip_rag=True indicates sync operation, allow ID-based upsert
                     continue
 
+                # Get vector_clock from metadata if available
+                vector_clock = None
+                if memory.metadata and memory.metadata.get("_vector_clock"):
+                    vector_clock = json.dumps(memory.metadata["_vector_clock"])
+
                 cursor.execute(
                     """
                     INSERT OR REPLACE INTO memories (id, content, type, tags, summary, namespace_id,
-                                      source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata, structured_data, authoritative, content_hash)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      source_file, source_repo, source_tool, project, session_id, created_at, updated_at, metadata, structured_data, authoritative, content_hash, vector_clock)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         memory.id,
@@ -911,6 +922,7 @@ class ContextFS:
                         else None,
                         1 if getattr(memory, "authoritative", False) else 0,
                         content_hash,
+                        vector_clock,
                     ),
                 )
                 existing_hashes.add(content_hash)
