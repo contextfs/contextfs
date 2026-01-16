@@ -133,7 +133,7 @@ class Config(BaseSettings):
     # MCP Server Settings
     # =================================================================
     mcp_enabled: bool = True
-    mcp_port: int = 3000
+    mcp_port: int = 8003
 
     # =================================================================
     # Logging
