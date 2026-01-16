@@ -473,6 +473,31 @@ async def list_tools() -> list[Tool]:
                 "required": ["from_id", "to_id", "relation"],
             },
         ),
+        Tool(
+            name="contextfs_sync",
+            description="Sync local memories with ContextFS Cloud. Requires cloud login (contextfs cloud login). Use for backup and cross-device access.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "enum": ["push", "pull", "both"],
+                        "description": "Sync direction: push (local→cloud), pull (cloud→local), both (default)",
+                        "default": "both",
+                    },
+                    "push_all": {
+                        "type": "boolean",
+                        "description": "Push all memories, not just changed ones (default: false)",
+                        "default": False,
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "Force overwrite server data regardless of vector clock state. Use to fix stale memories that keep getting rejected.",
+                        "default": False,
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -521,6 +546,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             return _handle_evolve(ctx, arguments)
         elif name == "contextfs_link":
             return _handle_link(ctx, arguments)
+        elif name == "contextfs_sync":
+            return await _handle_sync(arguments)
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
     except Exception as e:
@@ -1042,6 +1069,73 @@ def _handle_link(ctx: ContextFS, arguments: dict) -> list[TextContent]:
             type="text", text=f"Link created ({direction}): {from_id} --[{relation}]--> {to_id}"
         )
     ]
+
+
+async def _handle_sync(arguments: dict) -> list[TextContent]:
+    """Handle contextfs_sync tool."""
+    import time
+
+    from contextfs.sync import SyncClient
+
+    direction = arguments.get("direction", "both")
+    push_all = arguments.get("push_all", False)
+    force = arguments.get("force", False)
+
+    start = time.time()
+    try:
+        async with SyncClient() as client:
+            if direction == "push":
+                result = await client.push(push_all=push_all, force=force)
+                duration_ms = (time.time() - start) * 1000
+                return [
+                    TextContent(
+                        type="text",
+                        text=(
+                            f"Push complete ({duration_ms:.0f}ms).\n"
+                            f"Accepted: {result.accepted}\n"
+                            f"Rejected: {result.rejected}"
+                            + (f"\nConflicts: {len(result.conflicts)}" if result.conflicts else "")
+                        ),
+                    )
+                ]
+            elif direction == "pull":
+                result = await client.pull()
+                duration_ms = (time.time() - start) * 1000
+                return [
+                    TextContent(
+                        type="text",
+                        text=(
+                            f"Pull complete.\n"
+                            f"Memories: {len(result.memories)}\n"
+                            f"Sessions: {len(result.sessions)}"
+                            + (
+                                f"\nDeleted: {len(result.deleted_ids)}"
+                                if result.deleted_ids
+                                else ""
+                            )
+                        ),
+                    )
+                ]
+            else:  # both
+                # First push
+                push_result = await client.push(push_all=push_all, force=force)
+                # Then pull
+                pull_result = await client.pull()
+                duration_ms = (time.time() - start) * 1000
+
+                return [
+                    TextContent(
+                        type="text",
+                        text=(
+                            f"Sync complete ({duration_ms:.0f}ms).\n"
+                            f"Pushed: {push_result.accepted} accepted, {push_result.rejected} rejected\n"
+                            f"Pulled: {len(pull_result.memories)} memories, {len(pull_result.sessions)} sessions"
+                        ),
+                    )
+                ]
+    except Exception as e:
+        logger.exception("Sync failed")
+        return [TextContent(type="text", text=f"Sync failed: {e}")]
 
 
 # SSE Transport setup

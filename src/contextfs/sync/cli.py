@@ -121,7 +121,14 @@ def register(server: str, name: str | None):
     default=False,
     help="Push all memories, not just changes since last sync",
 )
-def push(server: str, namespace: tuple[str, ...], push_all: bool):
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    default=False,
+    help="Force overwrite server data regardless of vector clock state",
+)
+def push(server: str, namespace: tuple[str, ...], push_all: bool, force: bool):
     """Push local changes to the sync server."""
     from contextfs.sync import SyncClient
 
@@ -130,7 +137,7 @@ def push(server: str, namespace: tuple[str, ...], push_all: bool):
 
     async def _push():
         async with SyncClient(server, api_key=api_key) as client:
-            return await client.push(namespace_ids=namespace_ids, push_all=push_all)
+            return await client.push(namespace_ids=namespace_ids, push_all=push_all, force=force)
 
     try:
         result = run_async(_push())

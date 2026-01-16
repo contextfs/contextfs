@@ -555,7 +555,7 @@ wheels = [
 
 [[package]]
 name = "contextfs"
-version = "0.2.1"
+version = "0.2.14"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -575,6 +575,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "rich" },
     { name = "sentence-transformers" },
+    { name = "sse-starlette" },
     { name = "tiktoken" },
     { name = "typer" },
     { name = "uvicorn" },
@@ -600,6 +601,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "stripe" },
 ]
 docs = [
     { name = "mkdocs-material" },
@@ -656,7 +658,9 @@ requires-dist = [
     { name = "rich", specifier = ">=13.9.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
     { name = "sentence-transformers", specifier = ">=3.0.0" },
+    { name = "sse-starlette", specifier = ">=2.0.0" },
     { name = "stripe", marker = "extra == 'cloud'", specifier = ">=8.0.0" },
+    { name = "stripe", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "tiktoken", specifier = ">=0.8.0" },
     { name = "typer", specifier = ">=0.15.0" },
     { name = "uvicorn", specifier = ">=0.32.0" },

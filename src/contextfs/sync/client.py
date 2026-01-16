@@ -414,6 +414,7 @@ class SyncClient:
         memories: list[Memory] | None = None,
         namespace_ids: list[str] | None = None,
         push_all: bool = False,
+        force: bool = False,
     ) -> SyncPushResponse:
         """
         Push local changes to server.
@@ -422,6 +423,7 @@ class SyncClient:
             memories: List of Memory objects to sync (queries local if not provided)
             namespace_ids: Namespace filter for querying local memories
             push_all: If True, push all memories regardless of last sync time
+            force: If True, overwrite server data regardless of vector clock state
 
         Returns:
             SyncPushResponse with accepted/rejected counts and conflicts
@@ -497,6 +499,7 @@ class SyncClient:
             sessions=sessions,
             edges=edges,
             last_sync_timestamp=self._last_sync,
+            force=force,
         )
 
         response = await self._client.post(
@@ -1178,6 +1181,7 @@ class SyncClient:
     async def sync_all(
         self,
         namespace_ids: list[str] | None = None,
+        force: bool = False,
     ) -> SyncResult:
         """
         Full bidirectional sync using content-addressed approach.
@@ -1188,6 +1192,7 @@ class SyncClient:
 
         Args:
             namespace_ids: Filter by namespaces
+            force: If True, overwrite server data regardless of vector clock state
 
         Returns:
             SyncResult with push and pull responses
@@ -1230,9 +1235,45 @@ class SyncClient:
                 errors=errors,
             )
 
-        # Step 2: Push only what server is missing (content-addressed push)
+        # Step 2: Push changes to server
         push_result: SyncPushResponse
-        if diff_result.total_server_missing > 0:
+        if force:
+            # Force mode: push previously rejected items + new changes
+            rejected_ids = self._load_rejected_ids()
+            if rejected_ids or diff_result.total_server_missing > 0:
+                # Combine rejected IDs with server-missing IDs
+                all_memory_ids = list(set(rejected_ids + diff_result.server_missing_memory_ids))
+                try:
+                    push_result = await self._push_by_ids(
+                        memory_ids=all_memory_ids,
+                        session_ids=diff_result.server_missing_session_ids,
+                        edge_ids=diff_result.server_missing_edge_ids,
+                        force=True,
+                    )
+                    # Clear rejected IDs on successful force push
+                    if push_result.rejected == 0:
+                        self._clear_rejected_ids()
+                except Exception as e:
+                    logger.error(f"Force push failed: {e}")
+                    errors.append(f"Force push failed: {e}")
+                    push_result = SyncPushResponse(
+                        success=False,
+                        accepted=0,
+                        rejected=0,
+                        conflicts=[],
+                        server_timestamp=datetime.now(timezone.utc),
+                        message=str(e),
+                    )
+            else:
+                push_result = SyncPushResponse(
+                    success=True,
+                    accepted=0,
+                    rejected=0,
+                    conflicts=[],
+                    server_timestamp=diff_result.server_timestamp,
+                )
+        elif diff_result.total_server_missing > 0:
+            # Normal mode: push only what server is missing (content-addressed)
             try:
                 push_result = await self._push_by_ids(
                     memory_ids=diff_result.server_missing_memory_ids,
@@ -1343,6 +1384,7 @@ class SyncClient:
         memory_ids: list[str],
         session_ids: list[str],
         edge_ids: list[str],
+        force: bool = False,
     ) -> SyncPushResponse:
         """Push specific items by ID (content-addressed push)."""
         # Auto-initialize E2EE from API key + salt
@@ -1413,6 +1455,7 @@ class SyncClient:
             sessions=sessions,
             edges=edges,
             last_sync_timestamp=self._last_sync,
+            force=force,
         )
 
         response = await self._client.post(
@@ -1432,6 +1475,7 @@ class SyncClient:
         logger.info(
             f"Content-addressed push: {result.accepted} accepted, "
             f"{result.rejected} rejected, {len(result.conflicts)} conflicts"
+            + (" (forced)" if force else "")
         )
         return result
 
