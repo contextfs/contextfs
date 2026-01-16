@@ -507,11 +507,11 @@ def install_gemini(
     installed = []
     mcp_url = _get_mcp_url()
 
-    # Gemini uses "httpUrl" for HTTP/SSE servers
+    # Gemini uses "url" for SSE transport (httpUrl is for Streamable HTTP)
     mcp_config = {
         "mcpServers": {
             "contextfs": {
-                "httpUrl": mcp_url,
+                "url": mcp_url,
             }
         }
     }
