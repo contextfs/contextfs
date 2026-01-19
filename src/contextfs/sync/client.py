@@ -558,9 +558,8 @@ class SyncClient:
                 SyncItemSummary.from_memory(m) for m in synced_memories[: result.accepted_memories]
             ]
 
-        # Populate session/edge counts (server doesn't return these yet)
-        if result.accepted > 0:
-            result.accepted_sessions = len(sessions)
+        # Note: Server doesn't return per-session/edge acceptance counts yet
+        # Don't assume all sessions were accepted - leave as None until server supports it
 
         logger.info(
             f"Push complete: {result.accepted} accepted, "

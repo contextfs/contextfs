@@ -233,12 +233,24 @@ async def get_memory(
     user, _ = auth
     user_id = user.id
 
-    # SECURITY: Filter by user_id to prevent accessing other users' memories
+    # Get user's team memberships for access control
+    user_team_ids = await _get_user_team_ids(session, user_id)
+
+    # SECURITY: Allow access to own memories OR team-shared memories
+    ownership_conditions = [Memory.user_id == user_id]
+    if user_team_ids:
+        ownership_conditions.append(
+            and_(
+                Memory.team_id.in_(user_team_ids),
+                Memory.visibility.in_(["team_read", "team_write"]),
+            )
+        )
+
     result = await session.execute(
         select(Memory).where(
             Memory.id == memory_id,
             Memory.deleted_at.is_(None),
-            Memory.user_id == user_id,
+            or_(*ownership_conditions),
         )
     )
     memory = result.scalar_one_or_none()
@@ -262,6 +274,9 @@ async def get_memory(
         project=memory.project,
         created_at=memory.created_at.isoformat() if memory.created_at else "",
         updated_at=memory.updated_at.isoformat() if memory.updated_at else "",
+        visibility=memory.visibility or "private",
+        team_id=memory.team_id,
+        is_owner=memory.user_id == user_id,
         metadata=memory.extra_metadata,
     )
 
@@ -299,12 +314,25 @@ async def get_memory_lineage(
     user, _ = auth
     user_id = user.id
 
-    # First verify the memory belongs to this user
+    # Get user's team memberships for access control
+    user_team_ids = await _get_user_team_ids(session, user_id)
+
+    # Allow access to own memories OR team-shared memories
+    ownership_conditions = [Memory.user_id == user_id]
+    if user_team_ids:
+        ownership_conditions.append(
+            and_(
+                Memory.team_id.in_(user_team_ids),
+                Memory.visibility.in_(["team_read", "team_write"]),
+            )
+        )
+
+    # First verify the memory is accessible to this user
     memory_result = await session.execute(
         select(Memory.id).where(
             Memory.id == memory_id,
             Memory.deleted_at.is_(None),
-            Memory.user_id == user_id,
+            or_(*ownership_conditions),
         )
     )
     if not memory_result.scalar_one_or_none():
