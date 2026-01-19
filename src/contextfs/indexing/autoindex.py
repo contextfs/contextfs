@@ -1070,6 +1070,9 @@ class AutoIndexer:
                     # Auto: use half of CPU cores for I/O bound work
                     parallel_workers = max(1, (os.cpu_count() or 4) // 2)
 
+                # Collect indexed file records for batch SQLite insert
+                indexed_file_records: list[tuple[str, str, str, int]] = []
+
                 # Process files (with optional parallelism for file reading)
                 for idx, file_path in enumerate(files):
                     rel_path = str(file_path.relative_to(repo_path))
@@ -1078,12 +1081,17 @@ class AutoIndexer:
                     if on_progress:
                         on_progress(idx + 1, total_files, rel_path)
 
+                    # Compute file hash once for change detection and later recording
+                    current_hash = self._file_hash(file_path)
+
                     # Check if file changed (incremental mode)
-                    if incremental:
-                        current_hash = self._file_hash(file_path)
-                        if rel_path in indexed_hashes and indexed_hashes[rel_path] == current_hash:
-                            skipped += 1
-                            continue
+                    if (
+                        incremental
+                        and rel_path in indexed_hashes
+                        and indexed_hashes[rel_path] == current_hash
+                    ):
+                        skipped += 1
+                        continue
 
                     try:
                         # Process file
@@ -1145,19 +1153,19 @@ class AutoIndexer:
                             logger.warning(f"Failed to batch save memories for {rel_path}: {e}")
                             file_memories = 0
 
-                        # Track indexed file
+                        # Collect record for batch SQLite insert (reuse cached hash)
                         if file_memories > 0:
-                            self._record_indexed_file(
-                                namespace_id,
-                                rel_path,
-                                self._file_hash(file_path),
-                                file_memories,
+                            indexed_file_records.append(
+                                (namespace_id, rel_path, current_hash, file_memories)
                             )
                             files_indexed += 1
 
                     except Exception as e:
                         logger.warning(f"Failed to index {rel_path}: {e}")
                         errors.append({"file": rel_path, "error": str(e)})
+
+                # Batch insert all indexed file records (single transaction)
+                self._record_indexed_files_batch(indexed_file_records)
 
         # Index git history (unless FILES_ONLY mode)
         if mode != IndexMode.FILES_ONLY:
@@ -1258,6 +1266,35 @@ class AutoIndexer:
                 datetime.now().isoformat(),
                 memories_created,
             ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    def _record_indexed_files_batch(
+        self,
+        records: list[tuple[str, str, str, int]],
+    ) -> None:
+        """
+        Batch record indexed files for incremental updates.
+
+        Args:
+            records: List of tuples (namespace_id, file_path, file_hash, memories_created)
+        """
+        if not records:
+            return
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        now = datetime.now().isoformat()
+        cursor.executemany(
+            """
+            INSERT OR REPLACE INTO indexed_files
+            (namespace_id, file_path, file_hash, indexed_at, memories_created)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [(r[0], r[1], r[2], now, r[3]) for r in records],
         )
 
         conn.commit()

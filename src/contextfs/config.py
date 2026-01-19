@@ -76,6 +76,8 @@ class Config(BaseSettings):
     use_gpu: bool | None = None
     # Parallel workers for embedding (None = auto, 0 = all cores)
     embedding_parallel_workers: int | None = None
+    # Batch size for embedding generation (larger = fewer model calls but more memory)
+    embedding_batch_size: int = 256
 
     # =================================================================
     # FalkorDB Configuration

@@ -166,9 +166,11 @@ class FastEmbedder(BaseEmbedder):
         if not texts:
             return []
 
-        # Process in smaller batches to avoid tokenizer crashes on large inputs
-        # This keeps parallelism within each batch while preventing memory/threading issues
-        batch_size = 32  # Safe batch size for tokenizer stability
+        # Process in configurable batches for efficiency
+        # Larger batches = fewer model calls but more memory
+        from contextfs.config import get_config
+
+        batch_size = get_config().embedding_batch_size
         all_embeddings = []
 
         for i in range(0, len(texts), batch_size):
@@ -260,8 +262,11 @@ class SentenceTransformersEmbedder(BaseEmbedder):
         if not texts:
             return []
 
-        # Process in smaller batches to avoid tokenizer crashes on large inputs
-        batch_size = 32  # Safe batch size for tokenizer stability
+        # Process in configurable batches for efficiency
+        # Larger batches = fewer model calls but more memory
+        from contextfs.config import get_config
+
+        batch_size = get_config().embedding_batch_size
         all_embeddings = []
 
         for i in range(0, len(texts), batch_size):
