@@ -899,6 +899,12 @@ async def _handle_index(ctx: ContextFS, arguments: dict) -> list[TextContent]:
     mode = arguments.get("mode", "all")
     force = arguments.get("force", False)
 
+    # Handle force flag: clear existing index and do full re-index
+    # (same behavior as CLI)
+    if force:
+        ctx.clear_index()
+        incremental = False
+
     _indexing_state.running = True
     _indexing_state.repo_name = Path(repo_path).name
     _indexing_state.current = 0
@@ -914,7 +920,6 @@ async def _handle_index(ctx: ContextFS, arguments: dict) -> list[TextContent]:
                 repo_path=Path(repo_path),
                 incremental=incremental,
                 mode=mode,
-                force=force,
             )
             _indexing_state.result = result
         except Exception as e:
