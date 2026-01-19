@@ -354,13 +354,12 @@ class RAGBackend:
             elif env_gpu in ("0", "false", "no"):
                 use_gpu = False
             else:
-                # Auto-detect: enable GPU on Apple Silicon (CoreML), disable elsewhere
-                # CoreML is stable on macOS, CUDA requires specific driver setup
-                import platform
-
-                use_gpu = platform.system() == "Darwin" and platform.machine() == "arm64"
-                if use_gpu:
-                    logger.info("Auto-detected Apple Silicon, enabling CoreML acceleration")
+                # Default to CPU - benchmarks show it's faster for MiniLM models
+                # CoreML partitions the model (only 71% runs on Neural Engine),
+                # causing CPU↔GPU transfer overhead that makes it slower
+                # Users can opt-in with CONTEXTFS_USE_GPU=true if they have
+                # compatible models or want to test
+                use_gpu = False
 
         self._embedder = create_embedder(
             model_name=self.embedding_model_name,
