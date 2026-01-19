@@ -7,10 +7,13 @@ Supports FastEmbed (ONNX) or sentence-transformers with optional GPU acceleratio
 
 import fcntl
 import json
+import logging
 import os
 from pathlib import Path
 
 from contextfs.schemas import Memory, MemoryType, SearchResult
+
+logger = logging.getLogger(__name__)
 
 
 class ChromaLock:
@@ -344,8 +347,20 @@ class RAGBackend:
         # Auto-detect GPU if not specified
         use_gpu = self._use_gpu
         if use_gpu is None:
-            # Check environment variable
-            use_gpu = os.environ.get("CONTEXTFS_USE_GPU", "").lower() in ("1", "true", "yes")
+            # Check environment variable first
+            env_gpu = os.environ.get("CONTEXTFS_USE_GPU", "").lower()
+            if env_gpu in ("1", "true", "yes"):
+                use_gpu = True
+            elif env_gpu in ("0", "false", "no"):
+                use_gpu = False
+            else:
+                # Auto-detect: enable GPU on Apple Silicon (CoreML), disable elsewhere
+                # CoreML is stable on macOS, CUDA requires specific driver setup
+                import platform
+
+                use_gpu = platform.system() == "Darwin" and platform.machine() == "arm64"
+                if use_gpu:
+                    logger.info("Auto-detected Apple Silicon, enabling CoreML acceleration")
 
         self._embedder = create_embedder(
             model_name=self.embedding_model_name,

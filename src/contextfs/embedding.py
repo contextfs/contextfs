@@ -102,12 +102,12 @@ class FastEmbedder(BaseEmbedder):
             }
             fastembed_model = model_map.get(self._model_name, self._model_name)
 
-            # Configure providers for GPU
+            # Configure providers for GPU (with fallback to CPU if GPU fails)
             providers = None
             if self._use_gpu:
                 providers = self._get_gpu_providers()
                 if providers:
-                    logger.info(f"FastEmbed using GPU providers: {providers}")
+                    logger.info(f"FastEmbed attempting GPU providers: {providers}")
 
             # Determine parallel workers
             parallel = self._parallel
@@ -122,18 +122,30 @@ class FastEmbedder(BaseEmbedder):
                     # Auto: use half of CPU cores
                     parallel = max(1, (os.cpu_count() or 4) // 2)
 
-            self._model = TextEmbedding(
-                model_name=fastembed_model,
-                providers=providers,
-            )
+            # Try GPU providers first, fall back to CPU if they fail
+            try:
+                self._model = TextEmbedding(
+                    model_name=fastembed_model,
+                    providers=providers,
+                )
+            except Exception as e:
+                if providers:
+                    logger.warning(f"GPU providers failed ({e}), falling back to CPU")
+                    self._model = TextEmbedding(
+                        model_name=fastembed_model,
+                        providers=None,  # CPU only
+                    )
+                else:
+                    raise
             self._parallel = parallel
 
             # Get dimension from a test embedding
             test_emb = list(self._model.embed(["test"]))[0]
             self._dimension = len(test_emb)
 
+            provider_info = "GPU" if providers and self._use_gpu else "CPU"
             logger.info(
-                f"FastEmbed initialized: {fastembed_model} (dim={self._dimension}, parallel={parallel})"
+                f"FastEmbed initialized: {fastembed_model} (dim={self._dimension}, parallel={parallel}, {provider_info})"
             )
 
         except ImportError:
