@@ -1132,35 +1132,48 @@ async def _handle_sync(arguments: dict) -> list[TextContent]:
             if direction == "push":
                 result = await client.push(push_all=push_all, force=force)
                 duration_ms = (time.time() - start) * 1000
-                return [
-                    TextContent(
-                        type="text",
-                        text=(
-                            f"Push complete ({duration_ms:.0f}ms).\n"
-                            f"Accepted: {result.accepted}\n"
-                            f"Rejected: {result.rejected}"
-                            + (f"\nConflicts: {len(result.conflicts)}" if result.conflicts else "")
-                        ),
-                    )
+                # Build visibility output
+                output = [
+                    f"Push complete ({duration_ms:.0f}ms).",
+                    f"Accepted: {result.accepted}",
+                    f"Rejected: {result.rejected}",
                 ]
+                if result.conflicts:
+                    output.append(f"Conflicts: {len(result.conflicts)}")
+                # Show what was pushed
+                if result.pushed_items:
+                    output.append("")
+                    output.append("Pushed:")
+                    for item in result.pushed_items[:10]:  # Limit display
+                        output.append(f"  [{item.type}] {item.summary or item.id[:8]}")
+                    if len(result.pushed_items) > 10:
+                        output.append(f"  ... and {len(result.pushed_items) - 10} more")
+                return [TextContent(type="text", text="\n".join(output))]
+
             elif direction == "pull":
                 result = await client.pull()
                 duration_ms = (time.time() - start) * 1000
-                return [
-                    TextContent(
-                        type="text",
-                        text=(
-                            f"Pull complete.\n"
-                            f"Memories: {len(result.memories)}\n"
-                            f"Sessions: {len(result.sessions)}"
-                            + (
-                                f"\nDeleted: {len(result.deleted_ids)}"
-                                if result.deleted_ids
-                                else ""
-                            )
-                        ),
-                    )
+                # Build visibility output
+                output = [
+                    f"Pull complete ({duration_ms:.0f}ms).",
+                    f"Memories: {len(result.memories)}",
+                    f"Sessions: {len(result.sessions)}",
                 ]
+                if result.deleted_ids:
+                    output.append(f"Deleted: {len(result.deleted_ids)}")
+                # Show what was pulled
+                if result.memories:
+                    output.append("")
+                    output.append("Pulled:")
+                    for m in result.memories[:10]:  # Limit display
+                        summary = m.summary or (
+                            m.content[:50] + "..." if len(m.content) > 50 else m.content
+                        )
+                        output.append(f"  [{m.type}] {summary}")
+                    if len(result.memories) > 10:
+                        output.append(f"  ... and {len(result.memories) - 10} more")
+                return [TextContent(type="text", text="\n".join(output))]
+
             else:  # both
                 # First push
                 push_result = await client.push(push_all=push_all, force=force)
@@ -1168,16 +1181,33 @@ async def _handle_sync(arguments: dict) -> list[TextContent]:
                 pull_result = await client.pull()
                 duration_ms = (time.time() - start) * 1000
 
-                return [
-                    TextContent(
-                        type="text",
-                        text=(
-                            f"Sync complete ({duration_ms:.0f}ms).\n"
-                            f"Pushed: {push_result.accepted} accepted, {push_result.rejected} rejected\n"
-                            f"Pulled: {len(pull_result.memories)} memories, {len(pull_result.sessions)} sessions"
-                        ),
-                    )
-                ]
+                # Build visibility output
+                output = [f"Sync complete ({duration_ms:.0f}ms).", ""]
+
+                # Push section
+                output.append(
+                    f"⬆ Pushed: {push_result.accepted} accepted, {push_result.rejected} rejected"
+                )
+                if push_result.pushed_items:
+                    for item in push_result.pushed_items[:5]:
+                        output.append(f"    [{item.type}] {item.summary or item.id[:8]}")
+                    if len(push_result.pushed_items) > 5:
+                        output.append(f"    ... and {len(push_result.pushed_items) - 5} more")
+
+                # Pull section
+                output.append(
+                    f"⬇ Pulled: {len(pull_result.memories)} memories, {len(pull_result.sessions)} sessions"
+                )
+                if pull_result.memories:
+                    for m in pull_result.memories[:5]:
+                        summary = m.summary or (
+                            m.content[:50] + "..." if len(m.content) > 50 else m.content
+                        )
+                        output.append(f"    [{m.type}] {summary}")
+                    if len(pull_result.memories) > 5:
+                        output.append(f"    ... and {len(pull_result.memories) - 5} more")
+
+                return [TextContent(type="text", text="\n".join(output))]
     except Exception as e:
         logger.exception("Sync failed")
         return [TextContent(type="text", text=f"Sync failed: {e}")]

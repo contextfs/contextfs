@@ -234,6 +234,29 @@ class ConflictInfo(BaseModel):
     server_updated_at: datetime
 
 
+class SyncItemSummary(BaseModel):
+    """Summary of a synced item for visibility."""
+
+    id: str
+    type: str  # Memory type (fact, decision, etc.)
+    summary: str | None = None  # Brief summary or truncated content
+    namespace_id: str = "global"
+
+    @classmethod
+    def from_memory(cls, memory: SyncedMemory) -> SyncItemSummary:
+        """Create summary from a synced memory."""
+        # Use summary if available, otherwise truncate content
+        summary = memory.summary
+        if not summary and memory.content:
+            summary = memory.content[:80] + ("..." if len(memory.content) > 80 else "")
+        return cls(
+            id=memory.id,
+            type=memory.type,
+            summary=summary,
+            namespace_id=memory.namespace_id,
+        )
+
+
 class SyncPushResponse(BaseModel):
     """Response from push operation."""
 
@@ -246,6 +269,8 @@ class SyncPushResponse(BaseModel):
     conflicts: list[ConflictInfo] = Field(default_factory=list)
     server_timestamp: datetime = Field(default_factory=utc_now)
     message: str | None = None
+    # Visibility: summaries of what was pushed
+    pushed_items: list[SyncItemSummary] = Field(default_factory=list)
 
 
 class SyncPullRequest(BaseModel):

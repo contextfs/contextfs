@@ -36,6 +36,7 @@ from contextfs.sync.protocol import (
     SyncedEdge,
     SyncedMemory,
     SyncedSession,
+    SyncItemSummary,
     SyncManifestRequest,
     SyncPullRequest,
     SyncPullResponse,
@@ -549,6 +550,12 @@ class SyncClient:
         # Update local memories with new vector clocks after successful push
         if result.accepted > 0:
             self._update_local_vector_clocks(memories, memory_clocks)
+
+        # Populate pushed_items for visibility (from items we sent that were accepted)
+        if result.accepted > 0 and synced_memories:
+            result.pushed_items = [
+                SyncItemSummary.from_memory(m) for m in synced_memories[: result.accepted]
+            ]
 
         logger.info(
             f"Push complete: {result.accepted} accepted, "
@@ -1573,6 +1580,12 @@ class SyncClient:
             self._update_local_vector_clocks(memories, memory_clocks)
             self._update_local_session_clocks(sessions, session_clocks)
             self._update_local_edge_clocks(edges, edge_clocks)
+
+        # Populate pushed_items for visibility
+        if result.accepted > 0 and synced_memories:
+            result.pushed_items = [
+                SyncItemSummary.from_memory(m) for m in synced_memories[: result.accepted]
+            ]
 
         logger.info(
             f"Content-addressed push: {result.accepted} accepted, "
