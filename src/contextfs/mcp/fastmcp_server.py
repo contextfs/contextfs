@@ -28,6 +28,11 @@ from mcp.server.fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from contextfs.cli.utils import (
+    create_repo_config,
+    find_git_root,
+    is_repo_initialized,
+)
 from contextfs.config import get_config
 from contextfs.core import ContextFS
 from contextfs.schemas import TYPE_SCHEMAS, MemoryType, get_memory_type_values, get_type_schema
@@ -391,7 +396,7 @@ def contextfs_load_session(
 ) -> str:
     """Load a session's messages into context"""
     ctx = get_ctx()
-    session = ctx.get_session(session_id=session_id, label=label)
+    session = ctx.load_session(session_id=session_id, label=label)
     if not session:
         return "Session not found."
 
@@ -434,21 +439,35 @@ def contextfs_init(
     max_commits: int = 100,
 ) -> str:
     """Initialize a repository for ContextFS indexing. Creates .contextfs/config.yaml marker file to opt-in this repo for automatic indexing."""
-    ctx = get_ctx()
-    path = repo_path or str(Path.cwd())
+    # Determine repo path
+    start_path = Path(repo_path) if repo_path else Path.cwd()
+    git_root = find_git_root(start_path)
 
-    result = ctx.init_repository(
-        repo_path=Path(path),
+    if not git_root:
+        return f"Error: Not a git repository: {start_path.resolve()}"
+
+    # Check if already initialized
+    if is_repo_initialized(git_root) and not force:
+        return f"Repository already initialized: {git_root}\n(Use force=true to reinitialize)"
+
+    # Create config
+    config_path = create_repo_config(
+        repo_path=git_root,
         auto_index=auto_index,
-        run_index=run_index,
-        force=force,
+        created_by="mcp",
         max_commits=max_commits,
     )
 
-    output = [f"Repository initialized: {path}"]
-    if result.get("already_initialized") and not force:
-        output.append("(Already initialized, use force=true to reinitialize)")
-    if result.get("indexed"):
+    output = [f"Repository initialized: {git_root.name}", f"Config: {config_path}"]
+    if auto_index:
+        output.append("Auto-index: enabled")
+    else:
+        output.append("Auto-index: disabled")
+
+    # Run index if requested
+    if run_index:
+        ctx = get_ctx()
+        result = ctx.index_repository(repo_path=git_root, incremental=True)
         output.append(
             f"Indexed: {result.get('files_indexed', 0)} files, {result.get('commits_indexed', 0)} commits"
         )
@@ -715,8 +734,10 @@ async def contextfs_sync(
                     f"Memories: {len(result.memories)}",
                     f"Sessions: {len(result.sessions)}",
                 ]
-                if result.deleted_ids:
-                    output.append(f"Deleted: {len(result.deleted_ids)}")
+                # Handle optional deleted_ids attribute
+                deleted_ids = getattr(result, "deleted_ids", None)
+                if deleted_ids:
+                    output.append(f"Deleted: {len(deleted_ids)}")
                 if result.memories:
                     output.append("")
                     output.append("Pulled:")
