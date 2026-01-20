@@ -145,12 +145,41 @@ services:
     profiles:
       - admin
 
+  # ==========================================================================
+  # ContextFS Local Client - All-in-One (optional)
+  # For Windows/Docker users: ChromaDB + SQLite + MCP Server in one container
+  # ==========================================================================
+  local:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.mcp
+    container_name: contextfs-local
+    environment:
+      CONTEXTFS_DATA_DIR: /data
+      CONTEXTFS_MCP_HOST: "0.0.0.0"
+      CONTEXTFS_MCP_PORT: "8003"
+      CONTEXTFS_CHROMA_HOST: "127.0.0.1"
+      CONTEXTFS_CHROMA_PORT: "8000"
+      # Optional: Connect to cloud sync (if logged in)
+      CONTEXTFS_SYNC_SERVER: http://contextfs-sync-api:8766
+    ports:
+      - "8003:8003"   # MCP Server (SSE endpoint)
+      - "8000:8000"   # ChromaDB (optional, for external access)
+    volumes:
+      - local_data:/data
+      # Mount source for development (optional, remove for production)
+      - ./src/contextfs:/app/src/contextfs:ro
+    restart: unless-stopped
+    profiles:
+      - local
+
 volumes:
   sync_postgres_data:
   web_node_modules:
   linux_full_data:
   linux_npm_cache:
   pgadmin_data:
+  local_data:
 
 networks:
   default:
@@ -178,9 +207,26 @@ networks:
 #   docker-compose down -v
 #
 # ==========================================================================
-# Local Development (no Docker needed for ContextFS itself)
+# Local Client for Windows/Docker Users
 # ==========================================================================
-# ContextFS uses SQLite locally (~/.contextfs/context.db)
-# ChromaDB runs embedded (no separate server)
-# Only Docker services needed are for sync/web testing
+# Start local ContextFS (ChromaDB + SQLite + MCP Server):
+#   docker-compose --profile local up -d
+#
+# This starts a single container with all local services:
+#   - MCP Server: http://localhost:8003/sse (for Claude Code, Gemini, etc.)
+#   - ChromaDB: http://localhost:8000 (vector embeddings)
+#   - SQLite: /data/context.db (persisted in volume)
+#
+# Configure Claude Code to use the MCP server:
+#   {"mcpServers": {"contextfs": {"type": "sse", "url": "http://localhost:8003/sse"}}}
+#
+# View local service logs:
+#   docker-compose logs -f local
+#
+# ==========================================================================
+# Native Development (macOS/Linux without Docker)
+# ==========================================================================
+# Install ContextFS: pip install contextfs
+# Start servers: contextfs server start
+# This runs ChromaDB (8000) and MCP (8003) natively
 # ==========================================================================
