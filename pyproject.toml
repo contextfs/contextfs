@@ -26,11 +26,11 @@ dependencies = [
 
     # Vector Store & Embeddings
     "chromadb>=1.4.0",
-    "sentence-transformers>=3.0.0",
+    "sentence-transformers>=5.2.0",
 
     # LLM APIs
     "anthropic>=0.76.0",
-    "openai>=1.50.0",
+    "openai>=2.15.0",
 
     # Data & Validation
     "pydantic>=2.12.0",
