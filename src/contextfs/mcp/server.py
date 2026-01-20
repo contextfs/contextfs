@@ -1256,7 +1256,7 @@ def create_mcp_app() -> Starlette:
     """Create the MCP Starlette application."""
     routes = [
         Route("/health", endpoint=handle_health, methods=["GET"]),
-        # Handle both GET (SSE) and POST (messages) at /mcp/sse for Gemini CLI compatibility
+        # Handle /mcp/sse with trailing slash (original behavior)
         Mount("/mcp/sse", app=handle_sse_combined),
     ]
 
@@ -1271,7 +1271,19 @@ def create_mcp_app() -> Starlette:
         )
     ]
 
-    return Starlette(routes=routes, middleware=middleware)
+    # Create base app
+    app = Starlette(routes=routes, middleware=middleware)
+
+    # Wrap with custom middleware to handle /mcp/sse without trailing slash
+    async def redirect_middleware(scope, receive, send):
+        """Handle /mcp/sse without redirect for Gemini CLI compatibility."""
+        if scope["type"] == "http" and scope["path"] == "/mcp/sse":
+            # Rewrite path to include trailing slash without redirect
+            scope = dict(scope)
+            scope["path"] = "/mcp/sse/"
+        await app(scope, receive, send)
+
+    return redirect_middleware
 
 
 def run_mcp_server(host: str = "127.0.0.1", port: int = 8003) -> None:
