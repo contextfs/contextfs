@@ -158,7 +158,12 @@ services:
 
   # ==========================================================================
   # ContextFS Local Client - All-in-One (optional)
-  # For Windows/Docker users: ChromaDB + SQLite + MCP Server in one container
+  # For Windows/Mac/Linux Docker users: ChromaDB + SQLite + MCP Server
+  #
+  # Setup:
+  #   1. Set CONTEXTFS_WORKSPACE env var to your projects folder
+  #   2. docker-compose --profile local up -d
+  #   3. Use wrapper scripts in scripts/ for CLI access
   # ==========================================================================
   local:
     build:
@@ -171,15 +176,13 @@ services:
       CONTEXTFS_MCP_PORT: "8003"
       CONTEXTFS_CHROMA_HOST: "127.0.0.1"
       CONTEXTFS_CHROMA_PORT: "8000"
-      # Optional: Connect to cloud sync (if logged in)
-      CONTEXTFS_SYNC_SERVER: http://contextfs-sync-api:8766
     ports:
       - "8003:8003"   # MCP Server (SSE endpoint)
       - "8000:8000"   # ChromaDB (optional, for external access)
     volumes:
       - local_data:/data
-      # Mount source for development (optional, remove for production)
-      - ./src/contextfs:/app/src/contextfs:ro
+      # Mount user's projects folder (set CONTEXTFS_WORKSPACE env var)
+      - ${CONTEXTFS_WORKSPACE:-.}:/workspace:ro
     restart: unless-stopped
     profiles:
       - local
@@ -218,21 +221,32 @@ networks:
 #   docker-compose down -v
 #
 # ==========================================================================
-# Local Client for Windows/Docker Users
+# Local Client for Windows/Mac/Linux (Docker-based)
 # ==========================================================================
-# Start local ContextFS (ChromaDB + SQLite + MCP Server):
-#   docker-compose --profile local up -d
+# Setup (one-time):
+#   1. Set CONTEXTFS_WORKSPACE to your projects folder:
+#      - Windows CMD:    setx CONTEXTFS_WORKSPACE "C:\Users\You\Projects"
+#      - Windows PS:     [Environment]::SetEnvironmentVariable("CONTEXTFS_WORKSPACE", "C:\Users\You\Projects", "User")
+#      - Mac/Linux:      echo 'export CONTEXTFS_WORKSPACE="$HOME/Projects"' >> ~/.bashrc
 #
-# This starts a single container with all local services:
+#   2. Start the container:
+#      docker-compose --profile local up -d
+#
+#   3. Use CLI via wrapper scripts (in scripts/):
+#      - Windows: contextfs.bat or contextfs.ps1
+#      - Mac/Linux: contextfs.sh
+#
+# Services:
 #   - MCP Server: http://localhost:8003/sse (for Claude Code, Gemini, etc.)
 #   - ChromaDB: http://localhost:8000 (vector embeddings)
 #   - SQLite: /data/context.db (persisted in volume)
+#   - Workspace: /workspace (your projects folder)
 #
-# Configure Claude Code to use the MCP server:
+# Configure Claude Code:
 #   {"mcpServers": {"contextfs": {"type": "sse", "url": "http://localhost:8003/sse"}}}
 #
-# View local service logs:
-#   docker-compose logs -f local
+# Index a repo:
+#   contextfs index /workspace/my-repo
 #
 # ==========================================================================
 # Native Development (macOS/Linux without Docker)
