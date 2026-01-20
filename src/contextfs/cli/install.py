@@ -50,7 +50,7 @@ def _copy_template(src: Path, dest: Path, quiet: bool = False, force: bool = Fal
 def _get_mcp_url() -> str:
     """Get the MCP server URL from config."""
     config = get_config()
-    return f"http://127.0.0.1:{config.mcp_port}/mcp/sse"
+    return f"http://{config.mcp_host}:{config.mcp_port}{config.mcp_sse_path}"
 
 
 def _check_contextfs_version(quiet: bool = False) -> tuple[str | None, str | None]:

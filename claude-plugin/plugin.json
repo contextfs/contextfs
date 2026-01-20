@@ -15,7 +15,7 @@
   "mcpServers": {
     "contextfs": {
       "type": "sse",
-      "url": "http://127.0.0.1:8003/mcp/sse",
+      "url": "http://127.0.0.1:8003/sse",
       "description": "ContextFS MCP server - start with 'contextfs server'"
     }
   },

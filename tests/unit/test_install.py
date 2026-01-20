@@ -17,10 +17,10 @@ class TestHelperFunctions:
     """Test helper functions."""
 
     def test_get_mcp_url_default(self):
-        """Test MCP URL uses config port."""
+        """Test MCP URL uses config values."""
         url = _get_mcp_url()
         assert url.startswith("http://127.0.0.1:")
-        assert url.endswith("/mcp/sse")
+        assert url.endswith("/sse")
 
     def test_check_contextfs_version(self):
         """Test version check returns tuple."""

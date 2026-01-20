@@ -266,11 +266,14 @@ def server_status(
 
 def _show_mcp_status() -> None:
     """Show MCP server status."""
+    from contextfs.config import get_config
+
+    config = get_config()
     status = check_mcp_running()
     if status:
         pid = get_mcp_pid()
         console.print("[green]MCP server:[/green] running")
-        console.print("   URL: http://127.0.0.1:8003/mcp/sse")
+        console.print(f"   URL: http://{config.mcp_host}:{config.mcp_port}{config.mcp_sse_path}")
         if pid:
             console.print(f"   PID: {pid}")
 
@@ -513,10 +516,13 @@ def install_service(
     """
     import platform
 
+    from contextfs.config import get_config
+
+    config = get_config()
     system = platform.system()
 
     if service == "mcp":
-        default_port = port or 8003
+        default_port = port or config.mcp_port
         paths = get_mcp_service_paths()
 
         if paths["platform"] == "unknown":
@@ -536,7 +542,7 @@ def install_service(
                 install_mcp_linux_service(host, default_port)
 
             console.print("[green]MCP service installed and started[/green]")
-            console.print(f"   URL: http://{host}:{default_port}/mcp/sse")
+            console.print(f"   URL: http://{host}:{default_port}{config.mcp_sse_path}")
         except subprocess.CalledProcessError as e:
             console.print(f"[red]Failed to install service: {e}[/red]")
             raise typer.Exit(1)
