@@ -400,7 +400,7 @@ class RAGIntegration:
                         if target_doc:
                             related.append(
                                 {
-                                    "type": xref.reference_type,
+                                    "type": xref.ref_type,
                                     "file_path": target_doc.file_path,
                                     "document_id": target_doc.id,
                                 }

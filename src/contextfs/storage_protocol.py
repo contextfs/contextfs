@@ -68,6 +68,10 @@ class EdgeRelation(str, Enum):
     CAUSED_BY = "caused_by"  # Causal dependency
     CAUSES = "causes"  # Inverse of caused_by
 
+    # Dependency relationships (used by code analysis)
+    DEPENDS_ON = "depends_on"  # This depends on another
+    IMPLEMENTS = "implements"  # This implements another (interface/protocol)
+
     @classmethod
     def get_inverse(cls, relation: "EdgeRelation") -> "EdgeRelation":
         """Get the inverse relationship."""
@@ -522,6 +526,16 @@ class GraphBackend(Protocol):
 
         Returns:
             True if deleted, False if not found
+        """
+        ...
+
+    @abstractmethod
+    def get_stats(self) -> dict[str, Any]:
+        """
+        Get statistics about the graph backend.
+
+        Returns:
+            Dict with backend-specific statistics (nodes, edges, etc.)
         """
         ...
 

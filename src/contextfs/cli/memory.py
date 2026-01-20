@@ -695,7 +695,7 @@ def save_session(
                     if line.strip():
                         entry = json.loads(line)
                         if entry.get("type") == "human":
-                            ctx.log_message("user", entry.get("message", {}).get("content", ""))
+                            ctx.add_message("user", entry.get("message", {}).get("content", ""))
                         elif entry.get("type") == "assistant":
                             content = entry.get("message", {}).get("content", "")
                             if isinstance(content, list):
@@ -703,7 +703,7 @@ def save_session(
                                     c.get("text", "") for c in content if c.get("type") == "text"
                                 ]
                                 content = "\n".join(text_parts)
-                            ctx.log_message("assistant", content)
+                            ctx.add_message("assistant", content)
         except Exception as e:
             if not quiet:
                 console.print(f"[yellow]Warning: Could not read transcript: {e}[/yellow]")

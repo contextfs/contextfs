@@ -220,7 +220,7 @@ class CrossReferenceLinker:
             return self._resolve_link(rel)
         elif rel.type == RelationType.REFERENCES:
             return self._resolve_reference(rel)
-        elif rel.type == RelationType.FOREIGN_KEY:
+        elif rel.type == RelationType.FOREIGN_KEY_TO:
             return self._resolve_foreign_key(rel)
         elif rel.type == RelationType.CITES:
             return self._resolve_citation(rel)
