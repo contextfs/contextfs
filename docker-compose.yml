@@ -1,12 +1,18 @@
 # ContextFS Development Environment
-# Usage: docker-compose up -d
 #
-# Default services: sync-postgres, sync-api, web
-# Optional profiles: linux, admin
+# Profiles:
+#   - (default/cloud): sync-postgres, sync-api, web - Full cloud stack
+#   - local: All-in-one local client (ChromaDB + SQLite + MCP)
+#   - linux: Linux testing container
+#   - admin: pgAdmin for database management
+#
+# Usage:
+#   docker-compose up -d                    # Start cloud stack (default)
+#   docker-compose --profile local up -d    # Start local client only
 
 services:
   # ==========================================================================
-  # PostgreSQL for Sync Service (default)
+  # PostgreSQL for Sync Service (cloud profile)
   # ==========================================================================
   sync-postgres:
     image: pgvector/pgvector:pg16
@@ -19,16 +25,17 @@ services:
       - "5433:5432"
     volumes:
       - sync_postgres_data:/var/lib/postgresql/data
-      - ./migrations/sync-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U contextfs -d contextfs"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    profiles:
+      - cloud
 
   # ==========================================================================
-  # Sync API Service (default)
+  # Sync API Service (sync profile)
   # FastAPI server handling push/pull sync operations
   # ==========================================================================
   sync-api:
@@ -68,9 +75,11 @@ services:
       sync-postgres:
         condition: service_healthy
     restart: unless-stopped
+    profiles:
+      - cloud
 
   # ==========================================================================
-  # ContextFS Web UI - Next.js Dashboard (default)
+  # ContextFS Web UI - Next.js Dashboard (web profile)
   # ==========================================================================
   web:
     image: node:20-slim
@@ -97,6 +106,8 @@ services:
     command: >
       bash -c "npm install && npm run dev"
     restart: unless-stopped
+    profiles:
+      - cloud
 
   # ==========================================================================
   # Linux Full Client - Ubuntu with AI CLIs (optional)
