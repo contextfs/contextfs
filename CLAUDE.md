@@ -83,38 +83,66 @@ MemoryType.STEP      # Execution steps within tasks
 MemoryType.AGENT_RUN # LLM agent execution records
 ```
 
-## Git Workflow (GitFlow)
-Always follow GitFlow for changes:
-1. Create a new branch for changes (feature/*, bugfix/*, hotfix/*)
-2. Make changes on the feature branch
-3. **Validate work before committing** (run relevant tests, verify functionality)
-4. Create PR to merge into main
-5. Never commit directly to main
+## Git Workflow (MANDATORY)
+
+**ALWAYS follow this exact flow. Never push directly to main.**
+
+```
+feature/* → (push) → develop → (PR) → main
+```
+
+### Branch Protection:
+- **main**: Requires PR, no direct push allowed
+- **develop**: Direct push allowed
+
+### Step-by-step:
+1. Create feature branch from develop: `git checkout -b feature/my-feature develop`
+2. Make changes, run tests (`uv run pytest tests/ -x -q`)
+3. Commit and push to feature branch
+4. Merge to develop: `git checkout develop && git merge feature/my-feature && git push`
+5. Create PR from develop → main: `gh pr create --base main --head develop`
+6. Merge PR after checks pass
+
+### Quick Commands:
+```bash
+# Start new feature
+git checkout develop && git pull
+git checkout -b feature/my-feature
+
+# Finish feature (merge to develop)
+git push -u origin feature/my-feature
+git checkout develop && git merge feature/my-feature
+git push origin develop
+
+# Create PR to main
+gh pr create --base main --head develop --title "release: description"
+
+# After PR merged, sync develop
+git checkout develop && git pull origin main && git push origin develop
+```
 
 ### Release Workflow
 When the user says **"release"**, execute this full workflow:
 
 ```bash
-# 1. Commit all changes on current branch (develop or feature)
+# 1. Ensure on develop, commit any changes
+git checkout develop
 git add -A && git commit -m "description"
-git push origin <branch>
+git push origin develop
 
-# 2. If on feature branch, merge to develop first
-git checkout develop && git merge <feature-branch> && git push origin develop
-
-# 3. Run tests locally
+# 2. Run tests locally
 uv run pytest tests/ -x -q
 
-# 4. Merge develop to main
-git checkout main && git pull origin main
-git merge develop --no-edit && git push origin main
+# 3. Create PR from develop to main
+gh pr create --base main --head develop --title "release: version X.Y.Z"
 
-# 5. Switch back to develop for continued work
-git checkout develop && git merge main && git push origin develop
+# 4. After PR merged, sync develop with main
+git checkout develop && git pull origin main && git push origin develop
 ```
 
 This ensures:
 - All changes flow through develop before main
+- PRs required to merge into main (branch protection)
 - Tests pass before merging to main
 - main is always in a releasable state
 - develop stays in sync with main after release
