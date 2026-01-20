@@ -87,7 +87,7 @@ def _start_mcp(host: str, port: int, foreground: bool) -> None:
         cmd = [
             sys.executable,
             "-m",
-            "contextfs.mcp.server",
+            "contextfs.mcp.fastmcp_server",
             "--host",
             host,
             "--port",

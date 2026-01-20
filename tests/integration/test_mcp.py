@@ -137,7 +137,7 @@ class TestDetectCurrentRepo:
         """Test detect_current_repo function."""
         import os
 
-        from contextfs.mcp.server import detect_current_repo
+        from contextfs.mcp.fastmcp_server import detect_current_repo
 
         original_cwd = os.getcwd()
         os.chdir(git_repo)
@@ -152,7 +152,7 @@ class TestDetectCurrentRepo:
         """Test detect_current_repo returns None outside git repo."""
         import os
 
-        from contextfs.mcp.server import detect_current_repo
+        from contextfs.mcp.fastmcp_server import detect_current_repo
 
         # Create a non-git directory
         non_git_dir = temp_dir / "not-a-repo"

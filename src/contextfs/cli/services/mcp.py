@@ -45,7 +45,7 @@ def get_mcp_pid(port: int = 8003) -> int | None:
 
     try:
         result = subprocess.run(
-            ["pgrep", "-f", f"contextfs.mcp.server.*{port}"],
+            ["pgrep", "-f", f"contextfs.mcp.fastmcp_server.*{port}"],
             capture_output=True,
             text=True,
         )
@@ -140,7 +140,7 @@ def install_mcp_macos_service(host: str, port: int) -> bool:
         "ProgramArguments": [
             python_bin,
             "-m",
-            "contextfs.mcp.server",
+            "contextfs.mcp.fastmcp_server",
             "--host",
             host,
             "--port",
@@ -179,7 +179,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart={python_bin} -m contextfs.mcp.server --host {host} --port {port}
+ExecStart={python_bin} -m contextfs.mcp.fastmcp_server --host {host} --port {port}
 Restart=always
 RestartSec=10
 

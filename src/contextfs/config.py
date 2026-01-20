@@ -135,7 +135,10 @@ class Config(BaseSettings):
     # MCP Server Settings
     # =================================================================
     mcp_enabled: bool = True
+    mcp_host: str = "127.0.0.1"
     mcp_port: int = 8003
+    mcp_sse_path: str = "/sse"  # SSE endpoint path (FastMCP standard)
+    mcp_message_path: str = "/messages/"  # Message endpoint path
 
     # =================================================================
     # Logging

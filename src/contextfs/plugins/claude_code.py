@@ -105,7 +105,7 @@ class ClaudeCodePlugin:
         self._start_mcp_server()
         if sys.platform == "darwin":
             self._install_launchd_service()
-        print("  URL: http://localhost:8003/mcp/sse")
+        print("  URL: http://localhost:8003/sse")
 
         # Install project-level components if requested and path is set
         if include_project and self._project_path:
@@ -337,9 +337,10 @@ class ClaudeCodePlugin:
 
         # Add contextfs MCP server (SSE transport)
         # Note: Requires `contextfs mcp-server` to be running
+        # Uses /sse (FastMCP standard path), configurable via CONTEXTFS_MCP_SSE_PATH
         settings["mcpServers"]["contextfs"] = {
             "type": "sse",
-            "url": "http://localhost:8003/mcp/sse",
+            "url": "http://localhost:8003/sse",
         }
 
         # Write updated settings
@@ -377,7 +378,7 @@ class ClaudeCodePlugin:
         # Start the server in background
         try:
             # Use subprocess to start in background
-            cmd = [sys.executable, "-m", "contextfs.mcp.server"]
+            cmd = [sys.executable, "-m", "contextfs.mcp.fastmcp_server"]
             env = os.environ.copy()
             env["CONTEXTFS_MCP_PORT"] = str(port)
 
@@ -441,7 +442,7 @@ class ClaudeCodePlugin:
     <array>
         <string>{sys.executable}</string>
         <string>-m</string>
-        <string>contextfs.mcp.server</string>
+        <string>contextfs.mcp.fastmcp_server</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>

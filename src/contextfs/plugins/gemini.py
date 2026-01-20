@@ -2,11 +2,13 @@
 Gemini CLI Plugin for ContextFS.
 
 Provides integration with Google's Gemini CLI tool.
+MCP server configuration is added to ~/.gemini/settings.json
 """
 
 import json
 from pathlib import Path
 
+from contextfs.config import get_config
 from contextfs.core import ContextFS
 
 
@@ -26,10 +28,15 @@ class GeminiPlugin:
         """
         self.ctx = ctx or ContextFS(auto_load=True)
         self._config_dir = Path.home() / ".gemini"
+        self._settings_file = self._config_dir / "settings.json"
 
     def install(self) -> None:
         """Install Gemini CLI integration."""
         self._config_dir.mkdir(parents=True, exist_ok=True)
+
+        # Get MCP configuration
+        mcp_config = get_config()
+        mcp_url = f"http://{mcp_config.mcp_host}:{mcp_config.mcp_port}{mcp_config.mcp_sse_path}"
 
         # Create contextfs integration config
         config = {
@@ -43,6 +50,9 @@ class GeminiPlugin:
 
         config_file = self._config_dir / "contextfs.json"
         config_file.write_text(json.dumps(config, indent=2))
+
+        # Add MCP server to Gemini settings
+        self._install_mcp_settings(mcp_url)
 
         # Create wrapper script
         wrapper_script = '''#!/usr/bin/env python3
@@ -94,9 +104,32 @@ if __name__ == "__main__":
 
         print("Gemini plugin installed successfully.")
         print(f"Config: {config_file}")
+        print(f"MCP Settings: {self._settings_file}")
         print(f"Wrapper: {wrapper_file}")
+        print(f"\nMCP server URL: {mcp_url}")
         print("\nTo use: python ~/.gemini/contextfs_wrapper.py <your prompt>")
         print("Or add an alias: alias gemini-ctx='python ~/.gemini/contextfs_wrapper.py'")
+
+    def _install_mcp_settings(self, mcp_url: str) -> None:
+        """Install MCP server configuration to Gemini settings.json."""
+        # Load existing settings or create new
+        if self._settings_file.exists():
+            settings = json.loads(self._settings_file.read_text())
+        else:
+            settings = {}
+
+        # Ensure mcpServers section exists
+        if "mcpServers" not in settings:
+            settings["mcpServers"] = {}
+
+        # Add contextfs MCP server (SSE transport)
+        settings["mcpServers"]["contextfs"] = {
+            "type": "sse",
+            "url": mcp_url,
+        }
+
+        # Write updated settings
+        self._settings_file.write_text(json.dumps(settings, indent=2))
 
     def uninstall(self) -> None:
         """Uninstall Gemini CLI integration."""
@@ -107,6 +140,13 @@ if __name__ == "__main__":
             config_file.unlink()
         if wrapper_file.exists():
             wrapper_file.unlink()
+
+        # Remove MCP server from settings
+        if self._settings_file.exists():
+            settings = json.loads(self._settings_file.read_text())
+            if "mcpServers" in settings and "contextfs" in settings["mcpServers"]:
+                del settings["mcpServers"]["contextfs"]
+                self._settings_file.write_text(json.dumps(settings, indent=2))
 
         print("Gemini plugin uninstalled.")
 

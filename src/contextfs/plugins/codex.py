@@ -7,6 +7,7 @@ Provides integration with OpenAI's Codex CLI tool.
 import json
 from pathlib import Path
 
+from contextfs.config import get_config
 from contextfs.core import ContextFS
 
 
@@ -92,12 +93,14 @@ if __name__ == "__main__":
         wrapper_file.write_text(wrapper_script)
         wrapper_file.chmod(0o755)
 
-        # Create MCP config for Codex
+        # Create MCP config for Codex (SSE transport)
+        cfg = get_config()
+        mcp_url = f"http://{cfg.mcp_host}:{cfg.mcp_port}{cfg.mcp_sse_path}"
         mcp_config = {
             "mcpServers": {
                 "contextfs": {
-                    "command": "python",
-                    "args": ["-m", "contextfs.mcp_server"],
+                    "type": "sse",
+                    "url": mcp_url,
                 }
             }
         }
@@ -109,6 +112,7 @@ if __name__ == "__main__":
         print(f"Config: {config_file}")
         print(f"MCP Config: {mcp_config_file}")
         print(f"Wrapper: {wrapper_file}")
+        print(f"\nMCP server URL: {mcp_url}")
         print("\nTo use with MCP, add to your Codex config:")
         print(f'  "mcpServers": {json.dumps(mcp_config["mcpServers"], indent=4)}')
         print("\nOr use wrapper: python ~/.codex/contextfs_wrapper.py <your prompt>")
@@ -157,10 +161,12 @@ if __name__ == "__main__":
 
     def get_mcp_config(self) -> dict:
         """Get MCP server configuration for Codex."""
+        cfg = get_config()
+        mcp_url = f"http://{cfg.mcp_host}:{cfg.mcp_port}{cfg.mcp_sse_path}"
         return {
             "contextfs": {
-                "command": "python",
-                "args": ["-m", "contextfs.mcp_server"],
+                "type": "sse",
+                "url": mcp_url,
             }
         }
 
