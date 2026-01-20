@@ -60,7 +60,7 @@ logfile=/var/log/supervisor/supervisord.log
 pidfile=/var/run/supervisord.pid
 
 [program:chromadb]
-command=chroma run --path /data/chroma_db --host 127.0.0.1 --port 8000
+command=chroma run --path /data/chroma_db --host 0.0.0.0 --port 8000
 directory=/app
 autostart=true
 autorestart=true
