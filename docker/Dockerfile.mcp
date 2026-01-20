@@ -1,0 +1,96 @@
+# ContextFS Local Client - All-in-One Dockerfile
+# Includes: ChromaDB (vector store) + SQLite (metadata) + MCP Server
+#
+# This is the complete local ContextFS stack in a single container.
+# Perfect for Windows/Docker users who want a simple setup.
+#
+# Ports:
+#   - 8003: MCP Server (SSE endpoint for Claude Code, Gemini, etc.)
+#   - 8000: ChromaDB (internal, can expose if needed)
+#
+# Data:
+#   - /data/context.db: SQLite database (memories, sessions, edges)
+#   - /data/chroma_db: ChromaDB vector store (embeddings)
+#
+# Usage:
+#   docker-compose --profile local up -d
+#   # or standalone:
+#   docker build -f docker/Dockerfile.mcp -t contextfs-local .
+#   docker run -d -p 8003:8003 -v contextfs_data:/data contextfs-local
+
+FROM python:3.12-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies including supervisor for process management
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    supervisor \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy package files for installation
+COPY pyproject.toml README.md ./
+COPY src/contextfs /app/src/contextfs
+
+# Install from pyproject.toml (fastembed is now default, no torch/NVIDIA)
+RUN pip install --no-cache-dir -e "."
+
+# Set Python path
+ENV PYTHONPATH=/app/src:/app
+
+# Create data directories
+RUN mkdir -p /data/chroma_db /var/log/supervisor
+
+# Default environment variables
+ENV CONTEXTFS_DATA_DIR=/data
+ENV CONTEXTFS_MCP_HOST=0.0.0.0
+ENV CONTEXTFS_MCP_PORT=8003
+# ChromaDB runs locally in the same container
+ENV CONTEXTFS_CHROMA_HOST=127.0.0.1
+ENV CONTEXTFS_CHROMA_PORT=8000
+# Use fastembed (ONNX, CPU-only) for embeddings
+ENV CONTEXTFS_EMBEDDING_BACKEND=fastembed
+
+# Supervisor configuration to run both ChromaDB and MCP server
+RUN cat > /etc/supervisor/conf.d/contextfs.conf << 'EOF'
+[supervisord]
+nodaemon=true
+user=root
+logfile=/var/log/supervisor/supervisord.log
+pidfile=/var/run/supervisord.pid
+
+[program:chromadb]
+command=chroma run --path /data/chroma_db --host 0.0.0.0 --port 8000
+directory=/app
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/supervisor/chromadb.err.log
+stdout_logfile=/var/log/supervisor/chromadb.out.log
+priority=10
+
+[program:mcp]
+command=python -m contextfs.mcp.fastmcp_server --host 0.0.0.0 --port 8003
+directory=/app
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/supervisor/mcp.err.log
+stdout_logfile=/var/log/supervisor/mcp.out.log
+priority=20
+startsecs=5
+startretries=3
+# Wait for ChromaDB to start
+depends_on=chromadb
+
+EOF
+
+# Expose ports
+EXPOSE 8003 8000
+
+# Health check for MCP server
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl -sf http://localhost:8003/health || exit 1
+
+# Run supervisor to manage both processes
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/contextfs.conf"]
