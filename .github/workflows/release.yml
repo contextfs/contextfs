@@ -112,19 +112,18 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Get version from tag
-        id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-
-      - name: Update plugin version
+      - name: Verify plugin version matches tag
         working-directory: claude-plugin
         run: |
-          VERSION=${{ steps.version.outputs.version }}
-          # Update package.json
-          npm version $VERSION --no-git-tag-version --allow-same-version
-          # Update plugin.json
-          sed -i 's/"version": "[^"]*"/"version": "'$VERSION'"/' plugin.json
-          echo "Updated to version $VERSION"
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "Tag version: $TAG_VERSION"
+          echo "Package version: $PKG_VERSION"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Error: Tag version ($TAG_VERSION) does not match package.json ($PKG_VERSION)"
+            echo "Run scripts/release.sh to update all versions before tagging"
+            exit 1
+          fi
 
       - name: Publish to NPM
         working-directory: claude-plugin
