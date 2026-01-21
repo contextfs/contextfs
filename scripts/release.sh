@@ -12,9 +12,11 @@ if [ -z "$VERSION" ]; then
     echo "Example: $0 0.1.6"
     echo ""
     echo "Current versions:"
-    echo "  pyproject.toml:  $(grep '^version = ' pyproject.toml | cut -d'"' -f2)"
-    echo "  __init__.py:     $(grep '__version__' src/contextfs/__init__.py | cut -d'"' -f2)"
-    echo "  Latest git tag:  $(git describe --tags --abbrev=0 2>/dev/null || echo 'none')"
+    echo "  pyproject.toml:       $(grep '^version = ' pyproject.toml | cut -d'"' -f2)"
+    echo "  __init__.py:          $(grep '__version__' src/contextfs/__init__.py | cut -d'"' -f2)"
+    echo "  plugin package.json:  $(grep '"version"' claude-plugin/package.json | head -1 | cut -d'"' -f4)"
+    echo "  plugin plugin.json:   $(grep '"version"' claude-plugin/plugin.json | head -1 | cut -d'"' -f4)"
+    echo "  Latest git tag:       $(git describe --tags --abbrev=0 2>/dev/null || echo 'none')"
     exit 1
 fi
 
@@ -56,10 +58,18 @@ echo "✓ Updated pyproject.toml"
 sed -i '' "s/__version__ = \".*\"/__version__ = \"$VERSION\"/" src/contextfs/__init__.py
 echo "✓ Updated src/contextfs/__init__.py"
 
-# Commit changes
-git add pyproject.toml src/contextfs/__init__.py
+# Update claude-plugin/package.json
+sed -i '' 's/"version": "[^"]*"/"version": "'"$VERSION"'"/' claude-plugin/package.json
+echo "✓ Updated claude-plugin/package.json"
+
+# Update claude-plugin/plugin.json
+sed -i '' 's/"version": "[^"]*"/"version": "'"$VERSION"'"/' claude-plugin/plugin.json
+echo "✓ Updated claude-plugin/plugin.json"
+
+# Commit changes (CLI + plugin together)
+git add pyproject.toml src/contextfs/__init__.py claude-plugin/package.json claude-plugin/plugin.json
 git commit -m "Bump version to $VERSION"
-echo "✓ Committed version bump"
+echo "✓ Committed version bump (CLI + plugin)"
 
 # Create tag
 git tag "$TAG"
@@ -71,9 +81,11 @@ git push origin "$TAG"
 echo "✓ Pushed to remote"
 
 echo ""
-echo "To publish to PyPI:"
-echo "  python -m build"
-echo "  twine upload dist/*"
+echo "GitHub Actions will automatically:"
+echo "  • Publish CLI to PyPI"
+echo "  • Publish plugin to npm"
+echo "  • Create GitHub release"
+echo "  • Send Slack notification"
 
 echo ""
-echo "Done! Version $VERSION is ready."
+echo "Done! Version $VERSION released (CLI + plugin)."

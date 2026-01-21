@@ -1,6 +1,6 @@
 {
   "name": "contextfs",
-  "version": "0.2.18",
+  "version": "0.2.29",
   "description": "Persistent memory management for Claude Code - save, search, and recall context across sessions",
   "author": "Matthew Long",
   "homepage": "https://github.com/magneticion/contextfs",
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python -m contextfs.cli memory auto-recall --quiet"
+            "command": "contextfs memory auto-recall --quiet"
           }
         ]
       }
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python -m contextfs.cli memory save-session --label 'pre-compact' --quiet"
+            "command": "contextfs memory save-session --label 'pre-compact' --quiet"
           }
         ]
       }

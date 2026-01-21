@@ -6,18 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python -m contextfs.cli memory auto-recall --quiet"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python -m contextfs.cli memory extract-transcript --save --quiet"
+            "command": "contextfs memory auto-recall --quiet"
           }
         ]
       }
@@ -28,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python -m contextfs.cli memory save-session --label 'pre-compact' --quiet"
+            "command": "contextfs memory save-session --label 'pre-compact' --quiet"
           }
         ]
       }
