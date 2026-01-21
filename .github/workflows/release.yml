@@ -99,6 +99,39 @@ jobs:
         with:
           skip-existing: true
 
+  publish-npm:
+    name: Publish to NPM
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Update plugin version
+        working-directory: claude-plugin
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          # Update package.json
+          npm version $VERSION --no-git-tag-version --allow-same-version
+          # Update plugin.json
+          sed -i 's/"version": "[^"]*"/"version": "'$VERSION'"/' plugin.json
+          echo "Updated to version $VERSION"
+
+      - name: Publish to NPM
+        working-directory: claude-plugin
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
   github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
