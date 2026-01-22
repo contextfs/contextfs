@@ -44,10 +44,10 @@ if [ -z "$VERSION" ]; then
     echo ""
     echo "Current versions:"
     echo "  pyproject.toml:       $(grep '^version = ' pyproject.toml | cut -d'"' -f2)"
-    echo "  __init__.py:          $(grep '__version__' src/contextfs/__init__.py | cut -d'"' -f2)"
+    echo "  __init__.py:          $(grep '^__version__' src/contextfs/__init__.py | cut -d'"' -f2)"
     echo "  plugin package.json:  $(grep '"version"' claude-plugin/package.json | head -1 | cut -d'"' -f4)"
     echo "  plugin plugin.json:   $(grep '"version"' claude-plugin/plugin.json | head -1 | cut -d'"' -f4)"
-    echo "  Latest git tag:       $(git describe --tags --abbrev=0 2>/dev/null || echo 'none')"
+    echo "  Latest git tag:       $(git tag --sort=-v:refname | head -1 || echo 'none')"
     exit 1
 fi
 
