@@ -4,16 +4,21 @@ Handles user registration, API key management, and OAuth callbacks.
 All data stored in Postgres.
 """
 
+import asyncio
 import hashlib
 import os
+import random
 import secrets
 from datetime import datetime, timezone
+from functools import wraps
 from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from contextfs.auth import generate_api_key, hash_api_key
@@ -154,6 +159,27 @@ class OAuthCallbackResponse(BaseModel):
 # =============================================================================
 
 
+def with_retry(max_retries: int = 3, base_delay: float = 0.1):
+    """Retry decorator with exponential backoff for handling race conditions."""
+
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return await func(*args, **kwargs)
+                except IntegrityError:
+                    if attempt < max_retries - 1:
+                        # Exponential backoff with jitter
+                        await asyncio.sleep(base_delay * (2**attempt) + random.uniform(0, 0.1))
+                        continue
+                    raise
+
+        return wrapper
+
+    return decorator
+
+
 def _hash_password(password: str) -> str:
     """Hash password with SHA-256."""
     return hashlib.sha256(password.encode()).hexdigest()
@@ -192,6 +218,55 @@ async def _create_api_key(
     return full_key, encryption_salt
 
 
+async def _replace_session_key(
+    session: AsyncSession,
+    user_id: str,
+    session_type: str,
+    with_encryption: bool = True,
+) -> tuple[str, str | None]:
+    """Atomically replace session key using row-level locking.
+
+    This prevents race conditions where concurrent logins delete
+    each other's newly created keys.
+
+    Uses SELECT ... FOR UPDATE to serialize concurrent session operations
+    for the same user.
+
+    Returns: (full_api_key, encryption_salt)
+    """
+    # Lock user row to serialize concurrent session operations
+    await session.execute(select(UserModel).where(UserModel.id == user_id).with_for_update())
+
+    # Delete old keys and create new one atomically (within locked context)
+    await session.execute(
+        delete(APIKeyModel).where(
+            APIKeyModel.user_id == user_id,
+            APIKeyModel.name == session_type,
+        )
+    )
+
+    full_key, key_prefix = generate_api_key()
+    key_hash = hash_api_key(full_key)
+
+    encryption_salt = None
+    if with_encryption:
+        encryption_salt = secrets.token_urlsafe(32)
+
+    key_model = APIKeyModel(
+        id=str(uuid4()),
+        user_id=user_id,
+        name=session_type,
+        key_hash=key_hash,
+        key_prefix=key_prefix,
+        encryption_salt=encryption_salt,
+        is_active=True,
+    )
+    session.add(key_model)
+    await session.commit()
+
+    return full_key, encryption_salt
+
+
 async def _get_or_create_user(
     session: AsyncSession,
     email: str,
@@ -199,56 +274,76 @@ async def _get_or_create_user(
     provider: str,
     provider_id: str,
 ) -> tuple[str, bool]:
-    """Get or create user by email.
+    """Get or create user by email using atomic upsert.
+
+    Uses PostgreSQL INSERT ... ON CONFLICT to prevent race conditions
+    when two concurrent requests try to create the same user.
 
     Returns: (user_id, is_new_user)
     """
-    result = await session.execute(select(UserModel).where(UserModel.email == email))
-    user = result.scalar_one_or_none()
-
-    if user:
-        # Update existing user
-        user.name = name
-        user.provider_id = provider_id
-        user.last_login = datetime.now(timezone.utc)
-        await session.commit()
-        return user.id, False
-
-    # Create new user
     user_id = str(uuid4())
-    new_user = UserModel(
-        id=user_id,
-        email=email,
-        name=name,
-        provider=provider,
-        provider_id=provider_id,
-        email_verified=True,
+    now = datetime.now(timezone.utc)
+
+    # Atomic upsert: INSERT or UPDATE if email exists
+    stmt = (
+        pg_insert(UserModel)
+        .values(
+            id=user_id,
+            email=email,
+            name=name,
+            provider=provider,
+            provider_id=provider_id,
+            email_verified=True,
+            created_at=now,
+            last_login=now,
+        )
+        .on_conflict_do_update(
+            index_elements=["email"],
+            set_={
+                "name": name,
+                "provider_id": provider_id,
+                "last_login": now,
+            },
+        )
+        .returning(UserModel.id, UserModel.created_at)
     )
-    session.add(new_user)
-    # Commit user first to satisfy foreign key constraints
+
+    result = await session.execute(stmt)
+    row = result.fetchone()
+    actual_user_id = row[0]
+    created_at = row[1]
+
+    # Determine if this is a new user by comparing timestamps
+    # If created_at is very close to now, it's a new user
+    is_new_user = actual_user_id == user_id or (now - created_at).total_seconds() < 1
+
+    if is_new_user:
+        # Check if subscription already exists (in case of retry)
+        existing_sub = await session.execute(
+            select(SubscriptionModel).where(SubscriptionModel.user_id == actual_user_id)
+        )
+        if not existing_sub.scalar_one_or_none():
+            # Initialize subscription
+            subscription = SubscriptionModel(
+                id=str(uuid4()),
+                user_id=actual_user_id,
+                tier="free",
+                device_limit=2,
+                memory_limit=5000,
+                status="active",
+            )
+            session.add(subscription)
+
+            # Initialize usage
+            usage = UsageModel(
+                user_id=actual_user_id,
+                device_count=0,
+                memory_count=0,
+            )
+            session.add(usage)
+
     await session.commit()
-
-    # Initialize subscription
-    subscription = SubscriptionModel(
-        id=str(uuid4()),
-        user_id=user_id,
-        tier="free",
-        device_limit=2,
-        memory_limit=5000,
-        status="active",
-    )
-    session.add(subscription)
-
-    # Initialize usage
-    usage = UsageModel(
-        user_id=user_id,
-        device_count=0,
-        memory_count=0,
-    )
-    session.add(usage)
-
-    await session.commit()
-    return user_id, True
+    return actual_user_id, is_new_user
 
 
 # =============================================================================
@@ -278,17 +373,9 @@ async def login(
             detail="Invalid email or password",
         )
 
-    # Delete old session keys of the same type
-    await session.execute(
-        delete(APIKeyModel).where(
-            APIKeyModel.user_id == user.id,
-            APIKeyModel.name == request.session_type,
-        )
-    )
-
-    # Create new session key (E2EE controlled by env var)
+    # Atomically replace session key (E2EE controlled by env var)
     e2ee_enabled = os.environ.get("CONTEXTFS_E2EE_ENABLED", "false").lower() == "true"
-    full_key, encryption_salt = await _create_api_key(
+    full_key, encryption_salt = await _replace_session_key(
         session, user.id, request.session_type, with_encryption=e2ee_enabled
     )
 
@@ -634,8 +721,9 @@ async def oauth_callback(
         except Exception as e:
             print(f"Failed to send new user notification: {e}")
 
-    full_key, encryption_salt = await _create_api_key(
-        session, user_id, "Default Key", with_encryption=True
+    # Atomically replace OAuth session key
+    full_key, encryption_salt = await _replace_session_key(
+        session, user_id, "OAuth Session", with_encryption=True
     )
 
     encryption_key = None
@@ -728,15 +816,8 @@ async def oauth_token_exchange(
         except Exception as e:
             print(f"Failed to send new user notification: {e}")
 
-    # Delete old OAuth session keys for this user
-    await session.execute(
-        delete(APIKeyModel).where(
-            APIKeyModel.user_id == user_id,
-            APIKeyModel.name == "OAuth Session",
-        )
-    )
-
-    full_key, encryption_salt = await _create_api_key(
+    # Atomically replace OAuth session key
+    full_key, encryption_salt = await _replace_session_key(
         session, user_id, "OAuth Session", with_encryption=True
     )
 
