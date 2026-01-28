@@ -79,8 +79,17 @@ def hash_api_key(api_key: str) -> str:
 
     Returns:
         SHA-256 hash of the key as hex string
+
+    Note:
+        SHA-256 is appropriate here because API keys are high-entropy
+        cryptographic secrets (32+ random bytes), not user-chosen passwords.
+        bcrypt/argon2 are designed for low-entropy passwords, not random keys.
     """
-    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+    # CodeQL: This is not a password - API keys are high-entropy random secrets
+    # where SHA-256 is appropriate. Suppressing false positive.
+    return hashlib.sha256(
+        api_key.encode("utf-8")
+    ).hexdigest()  # lgtm[py/weak-sensitive-data-hashing]
 
 
 def verify_api_key(api_key: str, stored_hash: str) -> bool:
