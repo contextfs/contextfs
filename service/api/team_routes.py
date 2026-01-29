@@ -561,15 +561,6 @@ async def accept_invitation(
     # Backfill new member's existing memories with team visibility
     await _backfill_team_visibility(session, invitation.team_id, user.id)
 
-    # Also backfill ALL existing team members' memories (in case owner
-    # created the team before this backfill code existed)
-    team_members_result = await session.execute(
-        select(TeamMemberModel.user_id).where(TeamMemberModel.team_id == invitation.team_id)
-    )
-    for (member_user_id,) in team_members_result.all():
-        if member_user_id != user.id:
-            await _backfill_team_visibility(session, invitation.team_id, member_user_id)
-
     await session.commit()
 
     return {"status": "joined", "team_id": invitation.team_id}
@@ -684,15 +675,6 @@ async def accept_invitation_by_id(
 
     # Backfill new member's existing memories with team visibility
     await _backfill_team_visibility(session, invitation.team_id, user.id)
-
-    # Also backfill ALL existing team members' memories (in case owner
-    # created the team before this backfill code existed)
-    team_members_result = await session.execute(
-        select(TeamMemberModel.user_id).where(TeamMemberModel.team_id == invitation.team_id)
-    )
-    for (member_user_id,) in team_members_result.all():
-        if member_user_id != user.id:
-            await _backfill_team_visibility(session, invitation.team_id, member_user_id)
 
     await session.commit()
 
