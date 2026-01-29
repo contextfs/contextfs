@@ -39,6 +39,7 @@ from service.db.models import (
     SyncedSessionModel,
     SyncState,
     TeamMemberModel,
+    TeamModel,
 )
 from service.db.session import get_session_dependency
 
@@ -60,9 +61,11 @@ logger = logging.getLogger(__name__)
 
 
 async def _get_user_team_ids(session: AsyncSession, user_id: str) -> list[str]:
-    """Get all team IDs a user belongs to."""
+    """Get all team IDs a user belongs to (only teams that still exist)."""
     result = await session.execute(
-        select(TeamMemberModel.team_id).where(TeamMemberModel.user_id == user_id)
+        select(TeamMemberModel.team_id)
+        .join(TeamModel, TeamMemberModel.team_id == TeamModel.id)
+        .where(TeamMemberModel.user_id == user_id)
     )
     return [row[0] for row in result.all()]
 
